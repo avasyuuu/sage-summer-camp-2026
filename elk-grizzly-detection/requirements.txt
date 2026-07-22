@@ -1,5 +1,6 @@
 # for additional pywaggle install options, see: https://github.com/waggle-sensor/pywaggle#installation-guides
 pywaggle[vision]==0.56.0
-ultralytics>=8.3.0
+# 8.3.237+ is required for SAM 3 (SAM3SemanticPredictor)
+ultralytics>=8.3.237
 pybioclip>=2.1.0
 

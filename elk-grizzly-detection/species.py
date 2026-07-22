@@ -25,9 +25,10 @@ class SpeciesClassifier:
 
             self.classifier = CustomLabelsClassifier(labels)
         else:
-            from bioclip import TreeOfLifeClassifier
+            from bioclip import Rank, TreeOfLifeClassifier
 
             self.classifier = TreeOfLifeClassifier()
+            self.rank = Rank.SPECIES
 
         self.labels = labels
         self.padding = padding  # fraction of box size to include around the crop
@@ -51,7 +52,10 @@ class SpeciesClassifier:
     def classify(self, image, box):
         """Return {species, common_name, score} for one detection, or None."""
         crop = self._crop(image, box)
-        results = self.classifier.predict(crop)
+        if self.labels:
+            results = self.classifier.predict([crop])
+        else:
+            results = self.classifier.predict([crop], rank=self.rank, k=1)
         if not results:
             return None
 
