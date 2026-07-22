@@ -1,0 +1,13 @@
+name: "elk-grizzly-detection"
+version: "0.1.0"
+description: "Detect elk and grizzlies"
+keywords: ""
+authors: "Avasyu Chukkapalli"
+collaborators: ""
+funding: ""
+license: ""
+homepage: ""
+source:
+  architectures:
+    - "linux/amd64"
+    - "linux/arm64"

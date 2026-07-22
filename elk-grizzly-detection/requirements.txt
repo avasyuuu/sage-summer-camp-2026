@@ -1,0 +1,5 @@
+# for additional pywaggle install options, see: https://github.com/waggle-sensor/pywaggle#installation-guides
+pywaggle[vision]==0.56.0
+ultralytics>=8.3.0
+pybioclip>=2.1.0
+
