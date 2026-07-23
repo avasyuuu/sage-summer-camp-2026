@@ -2,26 +2,33 @@
 # from waggle.data.vision import Camera
 import sys
 
+import log
+from config import model_file
 from detector import AnimalDetector
 from species import SpeciesClassifier
 
 
 def report(name, detector, image_path, suffix):
-    """Run one pipeline over one image and print what it found."""
+    """Run one pipeline over one image: print, log to CSV, save annotated image."""
     print(f"[{name}]")
-    for det in detector.detect(image_path):
+
+    # detect once and reuse, so BioCLIP doesn't run twice per image
+    detections = detector.detect(image_path)
+
+    for det in detections:
         line = f"  {det['label']}: {det['confidence']:.2f} at {det['box']}"
         if det.get("species"):
             line += f" -> {det['common_name']} ({det['species']}) {det['species_score']:.2f}"
         print(line)
 
-    out = detector.annotate(image_path, suffix=suffix)
-    print(f"  saved -> {out}")
+    csv_path = log.append(detections, image_path, pipeline=name)
+    out = detector.annotate(image_path, suffix=suffix, detections=detections)
+    print(f"  saved -> {out}, logged -> {csv_path}")
 
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: python main.py <image> [image ...]")
+        print("usage: python scripts/main.py <image> [image ...]")
         return
 
     # One classifier shared by both pipelines so BioCLIP is loaded once.
@@ -30,7 +37,7 @@ def main():
     classifier = SpeciesClassifier()
 
     yolo = AnimalDetector(
-        model_path="yolo11n.pt",
+        model_path=str(model_file("yolo11n.pt")),
         conf=0.35,
         species_classifier=classifier,
     )
@@ -42,7 +49,7 @@ def main():
         from sam_detector import SamDetector
 
         sam = SamDetector(
-            model_path="sam3.pt",
+            model_path=str(model_file("sam3.pt")),
             prompts=["elk", "grizzly bear", "deer", "black bear"],
             species_classifier=classifier,
         )

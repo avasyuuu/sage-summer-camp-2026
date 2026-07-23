@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 
+from config import output_file
 from species import ANIMAL_LABELS
 
 
@@ -75,8 +76,13 @@ class BaseDetector:
 
         return detections
 
-    def annotate(self, image_path, output_path=None, suffix="detected"):
-        """Draw boxes + labels on the image and save it. Returns the output path."""
+    def annotate(self, image_path, output_path=None, suffix="detected",
+                 detections=None):
+        """Draw boxes + labels on the image and save it. Returns the output path.
+
+        Pass `detections` from an earlier detect() call to avoid running
+        inference (and BioCLIP) a second time.
+        """
         image = self._read(image_path)
 
         # scale line/text weight to the image so labels stay readable at any resolution
@@ -84,7 +90,10 @@ class BaseDetector:
         thickness = max(int(2 * scale), 2)
         font_scale = max(0.6 * scale, 0.6)
 
-        for det in self.detect(image_path, image=image):
+        if detections is None:
+            detections = self.detect(image_path, image=image)
+
+        for det in detections:
             x1, y1, x2, y2 = det["box"]
 
             # prefer the species name when BioCLIP identified one
@@ -106,7 +115,7 @@ class BaseDetector:
 
         if output_path is None:
             src = Path(image_path)
-            output_path = src.with_name(f"{src.stem}_{suffix}{src.suffix}")
+            output_path = output_file(f"{src.stem}_{suffix}{src.suffix}")
 
         cv2.imwrite(str(output_path), image)
         return output_path
