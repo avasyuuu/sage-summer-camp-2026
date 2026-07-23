@@ -1,5 +1,7 @@
 # Wildlife Detection Pipeline — Classroom Notes
 
+*Last updated: 23 July 2026 · Work spanned 22–23 July 2026.*
+
 Project: **`elk-grizzly-detection`** — a Sage camera plugin that looks at wildlife
 photos and answers three questions in order:
 
@@ -271,21 +273,125 @@ touches Docker. Docker is for deployment/consistency, not something the code
 The old logger *appended* every run, so re-running stacked duplicate rows. **Fix:**
 the CSV is now written **fresh** each run, so it's always exactly that run's data.
 
+### 7.7 "Python not recognized" / phantom `.venv` (`ENOENT`)
+VS Code's Python extension kept auto-creating a `.venv`, partially installing it,
+then it got deleted — so the Run button pointed at a `.venv\Scripts\python.exe`
+that no longer existed. **Fix:** rebuild the `.venv` properly (`python -m venv
+.venv` + full `pip install -r requirements.txt`), then pin VS Code's interpreter
+to it (§8.5). Underlying lesson: commit to **one** environment instead of letting
+tools spawn new ones. See §8.
+
+### 7.8 "It worked before through Docker" (it didn't)
+A common misconception: believing `python main.py` ran through Docker. It never
+did — that command runs local Python only. Docker requires explicit `docker
+build`/`docker run`. See §8.2.
+
 ---
 
-## 8. Environments — the mental model
+## 8. Environments — the mental model (READ THIS)
 
-Three separate "worlds," each needing its own package install:
+Most of our headaches came from environment confusion, not code. This section
+is the antidote.
+
+### 8.1 The one idea that explains everything
+
+**Code only runs if the *specific Python you launch it with* has the packages
+installed.** A computer can have several Pythons, and typing `python` picks
+whichever is first on your PATH. If the packages live in Python A but your
+terminal launches Python B, you get `ModuleNotFoundError` — even though "nothing
+changed." That is the root cause of almost every problem below.
+
+Check which Python you're on, anytime:
+
+```bash
+python -c "import sys; print(sys.executable)"
+```
+
+### 8.2 Local vs Docker are two SEPARATE paths
+
+This is the big one. `python main.py` on your laptop **never uses Docker.**
+
+| Path | What runs it | Needs a local venv/conda? |
+|---|---|---|
+| **Local** — `python main.py` | your laptop's Python | **Yes** — install `requirements.txt` |
+| **Docker** — `docker build` + `docker run` | the container's own Python | No — the image is self-contained |
+
+- Typing `python main.py` runs your **local** Python directly. Nothing reads the
+  Dockerfile. To go through Docker you must explicitly run `docker build` then
+  `docker run`.
+- "When using Docker you don't need a Python environment" is TRUE — but only when
+  you actually run *inside the container*. It does not apply to running
+  `python main.py` locally.
+- Proof it was never Docker: the `ModuleNotFoundError: bioclip` we hit. A
+  container always has bioclip, so that error is impossible in Docker. It only
+  happens when your *local* Python is missing the package.
+
+So there are really three worlds, each with its own separate install:
 
 | World | When it's used | Notes |
 |---|---|---|
-| **Local Python** (venv / conda) | `python scripts/main.py` on your machine | Fastest for development. Must install `requirements.txt`. |
-| **WSL (Linux on Windows)** | running in an Ubuntu terminal | Closer to the Sage node; Triton works here. Separate install. |
-| **Docker container** | `docker build` + `docker run`; the Sage node | The Dockerfile installs everything inside the image. This is the deployment format. |
+| **Local Python** (a venv) | `python main.py` on your laptop | Fastest for day-to-day development |
+| **WSL (Linux on Windows)** | running in an Ubuntu terminal | Closer to the Sage node; Triton works here |
+| **Docker container** | `docker build`/`docker run`; the Sage node | The deployment format; bundles everything |
 
-For a project multiple people run, **Docker (or a documented venv setup) is what
-makes it portable** — "does your Python have the packages?" stops being a
-question because the answer is baked into the image.
+### 8.3 venv vs conda — which to use locally
+
+Use a **`.venv`** (a virtual environment) in the project folder. The rule of
+thumb: **one isolated `.venv` per project.**
+
+- A `.venv` holds only this project's packages, so projects can't break each
+  other.
+- conda `base` is a global, shared environment; installing project packages into
+  it mixes everything together and can break other tools.
+- VS Code auto-detects a `.venv` at the project root and activates it for you.
+- It's the portable, standard recipe teammates can reproduce (see §2).
+
+### 8.4 Activating `.venv` and getting out of conda
+
+New PowerShell terminals may auto-start in conda's `(base)`. To switch to the
+project venv:
+
+```bash
+conda deactivate                                   # leave conda (base)
+& c:\...\sage-summer-camp-2026\.venv\Scripts\Activate.ps1   # enter .venv
+```
+
+Your prompt should then read just `(.venv)`. Verify with the `sys.executable`
+check in §8.1 — it should show the `.venv\Scripts\python.exe` path.
+
+- `deactivate` (no arguments) leaves the venv; `conda deactivate` leaves conda —
+  different commands for different systems.
+- To stop conda hijacking every new terminal: `conda config --set
+  auto_activate_base false`. Then terminals open with no environment and you just
+  activate `.venv`.
+
+### 8.5 VS Code: pin the interpreter
+
+If the Run button errors with a `...\.venv\Scripts\python.exe ... not
+recognized` / `ENOENT`, VS Code is pointing at a deleted/rebuilt venv. Fix it
+once: `Ctrl+Shift+P` → **Python: Select Interpreter** → pick the project's
+`.venv`. VS Code stores the choice per-project; it is not part of git.
+
+### 8.6 The Dockerfile base image (`waggle/sage-thor-base`)
+
+`FROM waggle/sage-thor-base:0.1.0` is the base for the **Sage Thor** node
+(NVIDIA Jetson Thor — ARM64 + CUDA). This is **correct** for deployment and
+should be left as-is.
+
+- It's only awkward if you try to `docker build`/`docker run` it **locally** on a
+  Windows/x86 laptop: it's a large ARM/CUDA image and would need emulation or run
+  CPU-only.
+- You don't need to build it locally. Develop with the `.venv`; the Dockerfile
+  runs on the actual Sage Thor. The two live on different machines and don't
+  conflict.
+
+### 8.7 Reproducibility for the team
+
+For a project multiple people run, **Docker (or a documented venv + pinned
+`requirements.txt`) is what makes it portable** — "does your Python have the
+packages?" stops being a question because the answer is either baked into the
+image or spelled out in the setup steps. "It worked on my machine" almost always
+means the packages were installed into one Python by hand and never written down.
 
 ---
 
@@ -301,3 +407,25 @@ question because the answer is baked into the image.
   "low confidence"). Tunable via the prompt in `hazard.py`.
 - **Capture time:** the pipeline records processing time, not photo time. For
   time-of-day analysis, read it from the image later.
+
+---
+
+## 10. Timeline
+
+**22 July 2026**
+- Built the YOLO detection backbone; switched to the YOLO11 model.
+- Fixed an empty `detector.py` in the repo; added the `AnimalDetector` class.
+- Added BioCLIP species identification on the cropped detections.
+- Added a SAM 3 pipeline (parked — weights are license-gated, access pending).
+- Added CSV logging of detections.
+- Reorganized the project into `scripts/` and `output/` folders.
+
+**23 July 2026**
+- Reviewed an external `detectors.py` reference (YOLO + BioCLIP backends).
+- Wired in Gemma 3 hazard assessment (`safe`/`dangerous`).
+- Fixed the `TritonMissing` crash, the `top_p`/`top_k` warning, and the
+  "horse"/"dog" mislabeling (see §7).
+- Consolidated 8 files into 5 clean classes with a single results CSV.
+- Pinned `requirements.txt` and wrote the README for reproducibility.
+- Worked through the local-environment setup (venv vs. conda vs. Docker) and
+  settled on a project `.venv` (see §8).

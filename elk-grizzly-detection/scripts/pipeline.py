@@ -61,6 +61,10 @@ class WildlifePipeline:
             except Exception as e:
                 print(f"[gemma] hazard assessment disabled: {type(e).__name__}: {e}")
 
+        # Where results go. run() can override this per batch.
+        self.output_dir = OUTPUT_DIR
+        self.csv_path = CSV_PATH
+
     # ------------------------------------------------------------------ per image
 
     def process_image(self, image_path):
@@ -126,9 +130,9 @@ class WildlifePipeline:
                 cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness,
             )
 
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         src = Path(image_path)
-        out_path = OUTPUT_DIR / f"{src.stem}_detected{src.suffix}"
+        out_path = self.output_dir / f"{src.stem}_detected{src.suffix}"
         cv2.imwrite(str(out_path), image)
         return out_path
 
@@ -163,11 +167,10 @@ class WildlifePipeline:
             )
         return rows
 
-    @staticmethod
-    def _write_csv(rows):
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    def _write_csv(self, rows):
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         # Fresh file each run, so the CSV is exactly the current batch (no dupes).
-        with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
+        with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             writer.writeheader()
             writer.writerows(rows)
@@ -191,8 +194,16 @@ class WildlifePipeline:
                 print(f"skipping (not an image or folder): {arg}")
         return images
 
-    def run(self, inputs=None):
-        """Process files/folders (default: the test_images folder), write one CSV."""
+    def run(self, inputs=None, output_dir=None):
+        """Process files/folders (default: the test_images folder), write one CSV.
+
+        Pass `output_dir` to send this batch's images + CSV somewhere other than
+        the default output/ folder (e.g. a sub-folder like output/output1).
+        """
+        if output_dir is not None:
+            self.output_dir = Path(output_dir)
+            self.csv_path = self.output_dir / "detections.csv"
+
         images = self._collect(inputs or [str(TEST_IMAGES_DIR)])
         if not images:
             print("no images found")
@@ -212,8 +223,8 @@ class WildlifePipeline:
 
         self._write_csv(all_rows)
         print(f"\nDone: {len(images)} images processed")
-        print(f"  images -> {OUTPUT_DIR}")
-        print(f"  CSV    -> {CSV_PATH}")
+        print(f"  images -> {self.output_dir}")
+        print(f"  CSV    -> {self.csv_path}")
 
     @staticmethod
     def _print_detection(det):
