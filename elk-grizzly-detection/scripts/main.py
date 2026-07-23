@@ -26,8 +26,9 @@ def report(name, detector, hazard_classifier, image_path, suffix):
         print(line)
 
     csv_path = log.append(detections, image_path, pipeline=name)
+    gemma_csv_path = log.append_gemma(detections, image_path, pipeline=name)
     out = detector.annotate(image_path, suffix=suffix, detections=detections)
-    print(f"  saved -> {out}, logged -> {csv_path}")
+    print(f"  saved -> {out}, logged -> {csv_path}, gemma -> {gemma_csv_path}")
 
 
 def main():

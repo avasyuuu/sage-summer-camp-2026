@@ -35,8 +35,9 @@ python scripts/main.py \
 ```
 
 Use `--no-hazard` to run only YOLO and BioCLIP. Results are written to
-`output/detections.csv`; annotated boxes are red for `dangerous` and green for
-`safe`.
+`output/detections.csv`. Gemma-only results are written to
+`output/gemma_predictions.csv`; annotated boxes are red for `dangerous` and
+green for `safe`.
 
 The hazard label is triage guidance, not a guarantee of safety. BioCLIP can
 misidentify animals and Gemma can produce incorrect judgments, so consequential
