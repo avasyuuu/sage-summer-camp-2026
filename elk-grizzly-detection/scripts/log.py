@@ -15,6 +15,8 @@ FIELDS = [
     "species",
     "common_name",
     "species_score",
+    "hazard",
+    "hazard_reason",
     "x1",
     "y1",
     "x2",
@@ -53,6 +55,8 @@ def append(detections, image_path, pipeline, csv_path=None):
                         if det.get("species_score") is not None
                         else ""
                     ),
+                    "hazard": det.get("hazard", ""),
+                    "hazard_reason": det.get("hazard_reason", ""),
                     "x1": x1,
                     "y1": y1,
                     "x2": x2,

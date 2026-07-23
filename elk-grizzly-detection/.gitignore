@@ -6,3 +6,6 @@ output/
 
 # model weights - sam3.pt is gated, don't republish it
 *.pt
+
+# macOS
+.DS_Store

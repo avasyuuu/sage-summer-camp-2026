@@ -3,4 +3,6 @@ pywaggle[vision]==0.56.0
 # 8.3.237+ is required for SAM 3 (SAM3SemanticPredictor)
 ultralytics>=8.3.237
 pybioclip>=2.1.0
-
+# Gemma 3 support starts in Transformers 4.50.0.
+transformers>=4.50.0
+accelerate>=1.2.0

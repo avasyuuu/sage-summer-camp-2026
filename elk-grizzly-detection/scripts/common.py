@@ -102,14 +102,19 @@ class BaseDetector:
             else:
                 text = f"{det['label']} {det['confidence']:.2f}"
 
-            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), thickness)
+            if det.get("hazard"):
+                text += f" {det['hazard'].upper()}"
+
+            color = (0, 0, 255) if det.get("hazard") == "dangerous" else (0, 255, 0)
+
+            cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
             cv2.putText(
                 image,
                 text,
                 (x1, max(y1 - int(8 * scale), int(30 * scale))),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 font_scale,
-                (0, 255, 0),
+                color,
                 thickness,
             )
 
