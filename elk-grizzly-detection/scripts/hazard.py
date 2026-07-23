@@ -1,7 +1,16 @@
 """Gemma-based wildlife hazard assessment from BioCLIP species results."""
 
 import json
+import os
 import re
+
+# Gemma 3's generate() path tries to torch.compile the model. The compiler's
+# backend (Inductor) needs Triton to generate kernels, and Triton has no
+# Windows support, so the compile step raises TritonMissing. Force plain eager
+# execution instead — no compile, no Triton. This must be set before torch's
+# dynamo module is first imported, so it lives at module top. Eager is more
+# than fast enough for one detection at a time.
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 
 
 DEFAULT_MODEL = "google/gemma-3-1b-it"
@@ -11,7 +20,15 @@ class HazardClassifier:
     """Classify an identified species as safe or dangerous for a given context."""
 
     def __init__(self, model_id=DEFAULT_MODEL, context=None):
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        # Belt-and-suspenders with the env var above: disable the compiler at
+        # runtime too, in case torch's dynamo module was already imported.
+        try:
+            torch._dynamo.config.disable = True
+        except Exception:
+            pass
 
         self.context = context or (
             "The animal was detected by a fixed outdoor camera near people, "
@@ -24,6 +41,12 @@ class HazardClassifier:
             device_map="auto",
             torch_dtype="auto",
         )
+
+        # We decode greedily (do_sample=False), so the model's default sampling
+        # settings never apply. Clear them so transformers stops warning that
+        # top_p/top_k are ignored. This doesn't change any output.
+        self.model.generation_config.top_p = None
+        self.model.generation_config.top_k = None
 
     @staticmethod
     def _parse(text):

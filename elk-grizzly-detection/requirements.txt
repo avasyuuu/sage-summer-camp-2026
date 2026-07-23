@@ -1,8 +1,16 @@
-# for additional pywaggle install options, see: https://github.com/waggle-sensor/pywaggle#installation-guides
+# Pinned for reproducibility across machines. Torch/torchvision are intentionally
+# NOT pinned here: the Sage base image supplies a CUDA build, and a plain
+# `pip install` pulls the right build for each contributor's platform.
+
+# Sage plugin runtime + OpenCV/NumPy (the [vision] extra)
 pywaggle[vision]==0.56.0
-# 8.3.237+ is required for SAM 3 (SAM3SemanticPredictor)
-ultralytics>=8.3.237
-pybioclip>=2.1.0
-# Gemma 3 support starts in Transformers 4.50.0.
-transformers>=4.50.0
-accelerate>=1.2.0
+
+# YOLO detection (8.3.237+ also carries SAM 3 support if it's ever re-added)
+ultralytics==8.4.104
+
+# BioCLIP species identification
+pybioclip==2.1.5
+
+# Gemma 3 hazard assessment (Gemma 3 needs transformers >= 4.50)
+transformers==4.53.2
+accelerate==1.8.1
