@@ -5,8 +5,8 @@ stages:
 
 1. **YOLO** (`yolo11n`) detects and localizes animals (bounding boxes).
 2. **BioCLIP** identifies the species in each animal crop (scientific + common name).
-3. **Gemma 3** classifies the BioCLIP result as `safe` or `dangerous` for the
-   stated location context and gives a short reason.
+3. **Gemma 3** classifies the BioCLIP result as `safe` or `dangerous` using
+   only the identified species and gives a short reason.
 
 Outputs, in `output/`:
 
@@ -33,14 +33,16 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-**Gemma access:** `google/gemma-3-1b-it` is gated. Before the first run, accept
+**Gemma access:** `google/gemma-3-4b-it` is gated. Before the first run, accept
 Google's Gemma license on the Hugging Face model page and authenticate:
 
 ```bash
 hf auth login
 ```
 
-The first run downloads all model weights (YOLO, BioCLIP, Gemma — a few GB).
+The first run downloads all model weights (YOLO, BioCLIP, and Gemma). Gemma 3
+4B is substantially larger than the previous 1B model, so allow extra download
+time, disk space, and memory.
 
 ### Option B — Docker (matches the Sage deployment)
 
@@ -62,9 +64,6 @@ python scripts/main.py
 
 # process specific images
 python scripts/main.py test_images/d37363s15i5.jpg test_images/d70380s20i3.jpg
-
-# give the real deployment setting so Gemma judges risk in context
-python scripts/main.py --context "Camera beside a campground in northern Wisconsin"
 
 # skip the (slow) Gemma step — hazard columns left blank
 python scripts/main.py --no-hazard
@@ -97,6 +96,8 @@ output/         annotated images + detections.csv  (git-ignored)
 - **Weights are not committed** (`*.pt` is git-ignored). YOLO auto-downloads;
   BioCLIP/Gemma download from Hugging Face on first use.
 
-The hazard label is triage guidance, not a guarantee of safety. BioCLIP can
-misidentify animals and Gemma can produce incorrect judgments, so consequential
-alerts should be reviewed by a person and validated against local wildlife rules.
+The hazard label describes a species' general capacity to cause serious harm;
+it does not estimate the immediate danger posed by a particular animal. BioCLIP
+can misidentify animals and Gemma can produce incorrect judgments, so
+consequential alerts should be reviewed by a person and validated against local
+wildlife guidance.

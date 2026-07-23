@@ -43,7 +43,7 @@ class WildlifePipeline:
     """Loads the three models once, then runs them over any images you give it."""
 
     def __init__(self, conf=0.35, use_hazard=True, species_labels=None,
-                 gemma_model=None, context=None):
+                 gemma_model=None):
         # yolo11n.pt auto-downloads by name if the local weight isn't present yet
         # (e.g. a fresh teammate machine or a fresh container).
         weights = str(YOLO_WEIGHTS) if YOLO_WEIGHTS.exists() else "yolo11n.pt"
@@ -55,9 +55,7 @@ class WildlifePipeline:
             try:
                 from hazard import DEFAULT_MODEL, HazardClassifier
 
-                self.hazard = HazardClassifier(
-                    gemma_model or DEFAULT_MODEL, context=context
-                )
+                self.hazard = HazardClassifier(gemma_model or DEFAULT_MODEL)
             except Exception as e:
                 print(f"[gemma] hazard assessment disabled: {type(e).__name__}: {e}")
 
@@ -90,7 +88,6 @@ class WildlifePipeline:
                 verdict = self.hazard.assess(
                     det.get("common_name", ""),
                     det["species"],
-                    det["species_confidence"],
                 )
                 det["hazard"] = verdict["hazard"]
                 det["reason"] = verdict["hazard_reason"]

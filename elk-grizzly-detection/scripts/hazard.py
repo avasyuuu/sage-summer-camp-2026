@@ -13,13 +13,13 @@ import re
 os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 
 
-DEFAULT_MODEL = "google/gemma-3-1b-it"
+DEFAULT_MODEL = "google/gemma-3-4b-it"
 
 
 class HazardClassifier:
-    """Classify an identified species as safe or dangerous for a given context."""
+    """Classify an identified species by its inherent potential for harm."""
 
-    def __init__(self, model_id=DEFAULT_MODEL, context=None):
+    def __init__(self, model_id=DEFAULT_MODEL):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -30,10 +30,6 @@ class HazardClassifier:
         except Exception:
             pass
 
-        self.context = context or (
-            "The animal was detected by a fixed outdoor camera near people, "
-            "homes, trails, or other infrastructure."
-        )
         self._cache = {}
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -64,28 +60,31 @@ class HazardClassifier:
             raise ValueError("Gemma returned no reason")
         return {"hazard": hazard, "hazard_reason": reason}
 
-    def assess(self, common_name, species, species_score):
-        """Return a validated hazard label and short explanation."""
-        # Avoid repeating generation for equivalent detections in YOLO and SAM.
-        cache_key = (common_name, species, round(species_score, 2), self.context)
+    def assess(self, common_name, species):
+        """Return a species-based hazard label and short explanation."""
+        # Equivalent species always receive the same assessment, regardless of
+        # detection confidence or where an image was captured.
+        cache_key = (common_name.strip().lower(), species.strip().lower())
         if cache_key in self._cache:
             return self._cache[cache_key].copy()
 
-        prompt = f"""You are the final stage of a wildlife camera alert system.
-YOLO localized an animal and BioCLIP identified it. Decide whether this
-detection warrants a safety alert in the stated setting.
+        prompt = f"""Classify an animal's general danger to humans using only its
+species identity. Treat the scientific name as the primary identifier.
 
-Setting: {self.context}
 Common name: {common_name or "unknown"}
 Scientific name: {species or "unknown"}
-BioCLIP confidence: {species_score:.3f}
 
-Use "dangerous" when the identified animal could plausibly threaten people,
-pets, livestock, or property in this setting, or when low identification
-confidence makes dismissing the detection unsafe. Otherwise use "safe".
-This is a triage decision, not a claim that the species is always harmful.
+Base the decision only on established characteristics of the identified species.
+Do not consider or mention location, surroundings, proximity, current behavior,
+detection confidence, or other circumstances.
 
-Return only JSON in exactly this shape, with a concise reason:
+Use "dangerous" when members of the species have a meaningful inherent capacity
+to cause serious injury or death to humans through their typical size, strength,
+defensive or predatory behavior, venom, toxins, or well-established disease
+risk. Otherwise use "safe". This is a general species classification, not an
+assessment of the immediate risk from one particular animal.
+
+Return only JSON in exactly this shape, with a concise species-based reason:
 {{"hazard":"safe|dangerous","reason":"one short sentence"}}"""
 
         messages = [{"role": "user", "content": prompt}]
@@ -114,7 +113,6 @@ Return only JSON in exactly this shape, with a concise reason:
             result = self.assess(
                 det.get("common_name", ""),
                 det["species"],
-                det["species_score"],
             )
             det.update(result)
         return detections

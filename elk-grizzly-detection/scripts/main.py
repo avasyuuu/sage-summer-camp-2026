@@ -78,11 +78,6 @@ def main():
         help="skip the prompt: 'replace', 'new', or a custom sub-folder name",
     )
     parser.add_argument(
-        "--context",
-        default=os.environ.get("HAZARD_CONTEXT"),
-        help="location context Gemma uses for the safety decision",
-    )
-    parser.add_argument(
         "--gemma-model",
         default=os.environ.get("GEMMA_MODEL"),
         help="Hugging Face Gemma model id or local model directory",
@@ -95,7 +90,6 @@ def main():
     pipeline = WildlifePipeline(
         use_hazard=not args.no_hazard,
         gemma_model=args.gemma_model,
-        context=args.context,
     )
     pipeline.run(args.images, output_dir=output_dir)
 
