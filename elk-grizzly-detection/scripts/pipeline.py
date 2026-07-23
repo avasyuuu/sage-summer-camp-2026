@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_IMAGES_DIR = PROJECT_ROOT / "test_images"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 CSV_PATH = OUTPUT_DIR / "detections.csv"
-YOLO_WEIGHTS = PROJECT_ROOT / "yolo11n.pt"
+YOLO_WEIGHTS = PROJECT_ROOT / "yolo11l.pt"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -44,9 +44,9 @@ class WildlifePipeline:
 
     def __init__(self, conf=0.35, use_hazard=True, species_labels=None,
                  gemma_model=None):
-        # yolo11n.pt auto-downloads by name if the local weight isn't present yet
+        # yolo11l.pt auto-downloads by name if the local weight isn't present yet
         # (e.g. a fresh teammate machine or a fresh container).
-        weights = str(YOLO_WEIGHTS) if YOLO_WEIGHTS.exists() else "yolo11n.pt"
+        weights = str(YOLO_WEIGHTS) if YOLO_WEIGHTS.exists() else "yolo11l.pt"
         self.detector = AnimalDetector(weights, conf=conf)
         self.species = SpeciesClassifier(labels=species_labels)
 
@@ -191,17 +191,20 @@ class WildlifePipeline:
                 print(f"skipping (not an image or folder): {arg}")
         return images
 
-    def run(self, inputs=None, output_dir=None):
+    def run(self, inputs=None, output_dir=None, limit=None):
         """Process files/folders (default: the test_images folder), write one CSV.
 
         Pass `output_dir` to send this batch's images + CSV somewhere other than
         the default output/ folder (e.g. a sub-folder like output/output1).
+        Pass `limit` to process only the first N images (e.g. a quick baseline).
         """
         if output_dir is not None:
             self.output_dir = Path(output_dir)
             self.csv_path = self.output_dir / "detections.csv"
 
         images = self._collect(inputs or [str(TEST_IMAGES_DIR)])
+        if limit is not None:
+            images = images[:limit]
         if not images:
             print("no images found")
             return

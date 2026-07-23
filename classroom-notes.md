@@ -37,6 +37,34 @@ Each model does one job, and each fixes the previous one's weakness:
 > YOLO mislabeling an animal is normal and expected — that's the whole reason
 > BioCLIP is downstream.
 
+### 1.1 The specific models we use (and sizes)
+
+| Stage | Model in use | Notes |
+|---|---|---|
+| Detection | **YOLO11l** (large) | upgraded n → m → l for accuracy (23 Jul 2026) |
+| Species ID | **BioCLIP** (tree of life) | identifies the species inside each box |
+| Hazard | **Gemma 3 (`gemma-3-4b-it`)** | upgraded from 1b → 4b (~8.5 GB download) |
+
+**YOLO11 comes in T-shirt sizes.** They're the *same* model scaled bigger — the
+only trade-off is speed vs. accuracy:
+
+| Model | Size | Parameters | Speed | Accuracy |
+|---|---|---|---|---|
+| YOLO11**n** | nano | ~2.6M | fastest | lowest |
+| YOLO11**s** | small | ~9M | fast | better |
+| YOLO11**m** | medium | ~20M | medium | good |
+| YOLO11**l** | large | ~25M | slow | high ← **current** |
+| YOLO11**x** | extra-large | ~57M | slowest | highest |
+
+- **Bigger = more accurate but slower and heavier.** We moved up to `l` because
+  trail-cam animals are often small or half-hidden, exactly where the small
+  models miss things. On CPU it's slower; on the Sage Thor's GPU it's fine.
+- Switching sizes is a one-line change: the model name in `detector.py` **and**
+  `pipeline.py` (keep them matching!). New weights auto-download on first run
+  (~50 MB for `l`, nothing like the 8.5 GB Gemma).
+- The `.pt` weight files are git-ignored, so they don't get committed —
+  teammates auto-download the same model on their first run.
+
 ---
 
 ## 2. Installation & setup
@@ -429,3 +457,10 @@ means the packages were installed into one Python by hand and never written down
 - Pinned `requirements.txt` and wrote the README for reproducibility.
 - Worked through the local-environment setup (venv vs. conda vs. Docker) and
   settled on a project `.venv` (see §8).
+- Added a startup prompt for where results go: replace output, new output
+  folder, or a baseline run (first 5 images into `output/baseline`).
+- Upgraded the Gemma model from `gemma-3-1b-it` to `gemma-3-4b-it`.
+- Upgraded YOLO from nano → medium → **large** (`yolo11l`) for better accuracy;
+  kept `detector.py` and `pipeline.py` in sync (see §1.1).
+- Fixed a merge break: `main.py` still passed a removed `context` argument to the
+  species-only hazard classifier (`TypeError`).

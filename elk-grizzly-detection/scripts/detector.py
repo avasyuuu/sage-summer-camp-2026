@@ -30,7 +30,7 @@ def trusted_checkpoint_load():
 class AnimalDetector:
     """Wraps a YOLO model: image array in, list of detection dicts out."""
 
-    def __init__(self, model_path="yolo11m.pt", conf=0.35):
+    def __init__(self, model_path="yolo11l.pt", conf=0.35):
         with trusted_checkpoint_load():
             self.model = YOLO(model_path)
         self.conf = conf
