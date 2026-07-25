@@ -11,6 +11,6 @@ ultralytics==8.4.104
 # BioCLIP species identification
 pybioclip==2.1.5
 
-# Gemma 3 hazard assessment (Gemma 3 needs transformers >= 4.50)
-transformers==4.53.2
-accelerate==1.8.1
+# Gemma 3 4B hazard assessment using Google's QAT Q4_0 GGUF checkpoint
+llama-cpp-python==0.3.34
+huggingface-hub==1.24.0

@@ -94,9 +94,14 @@ def main():
         help="skip the prompt: 'replace', 'new', 'baseline', or a custom folder name",
     )
     parser.add_argument(
-        "--gemma-model",
-        default=os.environ.get("GEMMA_MODEL"),
-        help="Hugging Face Gemma model id or local model directory",
+        "--gemma-model-repo",
+        default=os.environ.get("GEMMA_MODEL_REPO"),
+        help="Hugging Face repository containing the Gemma GGUF model",
+    )
+    parser.add_argument(
+        "--gemma-model-file",
+        default=os.environ.get("GEMMA_MODEL_FILE"),
+        help="Gemma GGUF filename within the Hugging Face repository",
     )
     args = parser.parse_args()
 
@@ -108,7 +113,8 @@ def main():
 
     pipeline = WildlifePipeline(
         use_hazard=not args.no_hazard,
-        gemma_model=args.gemma_model,
+        gemma_model_repo=args.gemma_model_repo,
+        gemma_model_file=args.gemma_model_file,
     )
     pipeline.run(args.images, output_dir=output_dir, limit=limit)
 

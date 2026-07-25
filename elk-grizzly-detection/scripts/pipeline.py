@@ -2,8 +2,8 @@
 
 Processes a folder of images and produces, in output/:
   - one annotated image per input (boxes + species label; red box if dangerous)
-  - one CSV (detections.csv) with species, confidence, and the Gemma safe/dangerous
-    verdict for every detection.
+  - one CSV (detections.csv) with species, confidence, and Gemma's safe/dangerous
+    verdict plus a 1-10 danger score for every detection.
 """
 
 import csv
@@ -31,7 +31,7 @@ CSV_FIELDS = [
     "common_name",
     "species_confidence",  # BioCLIP "accuracy"
     "hazard",            # Gemma: safe / dangerous
-    "reason",            # Gemma's one-line justification
+    "danger_score",       # Gemma: 1 (least dangerous) to 10 (most dangerous)
     "x1", "y1", "x2", "y2",
 ]
 
@@ -43,7 +43,7 @@ class WildlifePipeline:
     """Loads the three models once, then runs them over any images you give it."""
 
     def __init__(self, conf=0.35, use_hazard=True, species_labels=None,
-                 gemma_model=None):
+                 gemma_model_repo=None, gemma_model_file=None):
         # yolo11l.pt auto-downloads by name if the local weight isn't present yet
         # (e.g. a fresh teammate machine or a fresh container).
         weights = str(YOLO_WEIGHTS) if YOLO_WEIGHTS.exists() else "yolo11l.pt"
@@ -53,9 +53,16 @@ class WildlifePipeline:
         self.hazard = None
         if use_hazard:
             try:
-                from hazard import DEFAULT_MODEL, HazardClassifier
+                from hazard import (
+                    DEFAULT_MODEL_FILE,
+                    DEFAULT_MODEL_REPO,
+                    HazardClassifier,
+                )
 
-                self.hazard = HazardClassifier(gemma_model or DEFAULT_MODEL)
+                self.hazard = HazardClassifier(
+                    gemma_model_repo or DEFAULT_MODEL_REPO,
+                    gemma_model_file or DEFAULT_MODEL_FILE,
+                )
             except Exception as e:
                 print(f"[gemma] hazard assessment disabled: {type(e).__name__}: {e}")
 
@@ -90,7 +97,7 @@ class WildlifePipeline:
                     det["species"],
                 )
                 det["hazard"] = verdict["hazard"]
-                det["reason"] = verdict["hazard_reason"]
+                det["danger_score"] = verdict["danger_score"]
 
         self._save_annotated(image, image_path, detections)
         return detections
@@ -117,7 +124,10 @@ class WildlifePipeline:
             x1, y1, x2, y2 = det["box"]
             text = self._label_text(det)
             if det.get("hazard"):
-                text += f" [{det['hazard'].upper()}]"
+                text += (
+                    f" [{det['hazard'].upper()} "
+                    f"{det['danger_score']}/10]"
+                )
             color = RED if det.get("hazard") == "dangerous" else GREEN
 
             cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
@@ -158,14 +168,14 @@ class WildlifePipeline:
                         if "species_confidence" in det else ""
                     ),
                     "hazard": det.get("hazard", ""),
-                    "reason": det.get("reason", ""),
+                    "danger_score": det.get("danger_score", ""),
                     "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                 }
             )
         return rows
 
     def _write_csv(self, rows):
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         # Fresh file each run, so the CSV is exactly the current batch (no dupes).
         with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
@@ -194,13 +204,16 @@ class WildlifePipeline:
     def run(self, inputs=None, output_dir=None, limit=None):
         """Process files/folders (default: the test_images folder), write one CSV.
 
-        Pass `output_dir` to send this batch's images + CSV somewhere other than
-        the default output/ folder (e.g. a sub-folder like output/output1).
+        Pass `output_dir` to send this batch's annotated images somewhere other
+        than the default output/ folder (e.g. output/output1). The CSV always
+        remains at output/detections.csv.
         Pass `limit` to process only the first N images (e.g. a quick baseline).
         """
         if output_dir is not None:
             self.output_dir = Path(output_dir)
-            self.csv_path = self.output_dir / "detections.csv"
+            # Keep the batch CSV in the general output folder even when
+            # annotated images are sent to a named subfolder.
+            self.csv_path = CSV_PATH
 
         images = self._collect(inputs or [str(TEST_IMAGES_DIR)])
         if limit is not None:
@@ -233,5 +246,5 @@ class WildlifePipeline:
             name = det.get("common_name") or det["species"]
             line += f" -> {name} ({det['species']}) {det['species_confidence']:.2f}"
         if det.get("hazard"):
-            line += f" -> {det['hazard'].upper()}"
+            line += f" -> {det['hazard'].upper()} {det['danger_score']}/10"
         print(line)

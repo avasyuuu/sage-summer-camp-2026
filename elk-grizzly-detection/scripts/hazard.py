@@ -1,48 +1,27 @@
 """Gemma-based wildlife hazard assessment from BioCLIP species results."""
 
 import json
-import os
 import re
 
-# Gemma 3's generate() path tries to torch.compile the model. The compiler's
-# backend (Inductor) needs Triton to generate kernels, and Triton has no
-# Windows support, so the compile step raises TritonMissing. Force plain eager
-# execution instead — no compile, no Triton. This must be set before torch's
-# dynamo module is first imported, so it lives at module top. Eager is more
-# than fast enough for one detection at a time.
-os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
-
-
-DEFAULT_MODEL = "google/gemma-3-4b-it"
+DEFAULT_MODEL_REPO = "google/gemma-3-4b-it-qat-q4_0-gguf"
+DEFAULT_MODEL_FILE = "gemma-3-4b-it-q4_0.gguf"
 
 
 class HazardClassifier:
     """Classify an identified species by its inherent potential for harm."""
 
-    def __init__(self, model_id=DEFAULT_MODEL):
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-
-        # Belt-and-suspenders with the env var above: disable the compiler at
-        # runtime too, in case torch's dynamo module was already imported.
-        try:
-            torch._dynamo.config.disable = True
-        except Exception:
-            pass
+    def __init__(self, model_repo=DEFAULT_MODEL_REPO,
+                 model_file=DEFAULT_MODEL_FILE):
+        from llama_cpp import Llama
 
         self._cache = {}
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            device_map="auto",
-            torch_dtype="auto",
+        self.model = Llama.from_pretrained(
+            repo_id=model_repo,
+            filename=model_file,
+            n_ctx=2048,
+            n_gpu_layers=-1,
+            verbose=False,
         )
-
-        # We decode greedily (do_sample=False), so the model's default sampling
-        # settings never apply. Clear them so transformers stops warning that
-        # top_p/top_k are ignored. This doesn't change any output.
-        self.model.generation_config.top_p = None
-        self.model.generation_config.top_k = None
 
     @staticmethod
     def _parse(text):
@@ -53,15 +32,28 @@ class HazardClassifier:
 
         result = json.loads(match.group(0))
         hazard = str(result.get("hazard", "")).strip().lower()
-        reason = str(result.get("reason", "")).strip()
+        danger_score = result.get("danger_score")
         if hazard not in {"safe", "dangerous"}:
             raise ValueError(f"Invalid hazard label from Gemma: {hazard!r}")
-        if not reason:
-            raise ValueError("Gemma returned no reason")
-        return {"hazard": hazard, "hazard_reason": reason}
+        if isinstance(danger_score, bool) or not isinstance(danger_score, int):
+            raise ValueError(
+                f"Gemma returned a non-integer danger score: {danger_score!r}"
+            )
+        if not 1 <= danger_score <= 10:
+            raise ValueError(
+                f"Gemma returned a danger score outside 1-10: {danger_score!r}"
+            )
+        if (hazard == "safe" and danger_score > 5) or (
+            hazard == "dangerous" and danger_score < 6
+        ):
+            raise ValueError(
+                "Gemma returned an inconsistent hazard label and danger score: "
+                f"{hazard!r}, {danger_score!r}"
+            )
+        return {"hazard": hazard, "danger_score": danger_score}
 
     def assess(self, common_name, species):
-        """Return a species-based hazard label and short explanation."""
+        """Return a species-based hazard label and danger score from 1-10."""
         # Equivalent species always receive the same assessment, regardless of
         # detection confidence or where an image was captured.
         cache_key = (common_name.strip().lower(), species.strip().lower())
@@ -78,30 +70,42 @@ Base the decision only on established characteristics of the identified species.
 Do not consider or mention location, surroundings, proximity, current behavior,
 detection confidence, or other circumstances.
 
-Use "dangerous" when members of the species have a meaningful inherent capacity
-to cause serious injury or death to humans through their typical size, strength,
-defensive or predatory behavior, venom, toxins, or well-established disease
-risk. Otherwise use "safe". This is a general species classification, not an
+Assign a danger score from 1 to 10 based on the species' inherent capacity to
+harm humans through its typical size, strength, defensive or predatory behavior,
+venom, toxins, or well-established disease risk. A score of 1 means the least
+dangerous and 10 means the most dangerous. Use "safe" for scores 1-5 and
+"dangerous" for scores 6-10. This is a general species classification, not an
 assessment of the immediate risk from one particular animal.
 
-Return only JSON in exactly this shape, with a concise species-based reason:
-{{"hazard":"safe|dangerous","reason":"one short sentence"}}"""
+Return only JSON in exactly this shape:
+{{"hazard":"safe|dangerous","danger_score":1}}"""
 
-        messages = [{"role": "user", "content": prompt}]
-        inputs = self.tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-        ).to(self.model.device)
-        output = self.model.generate(
-            **inputs,
-            max_new_tokens=80,
-            do_sample=False,
+        response = self.model.create_chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=80,
+            temperature=0.0,
+            response_format={
+                "type": "json_object",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "hazard": {
+                            "type": "string",
+                            "enum": ["safe", "dangerous"],
+                        },
+                        "danger_score": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10,
+                        },
+                    },
+                    "required": ["hazard", "danger_score"],
+                    "additionalProperties": False,
+                },
+            },
         )
-        generated = output[0][inputs["input_ids"].shape[-1]:]
-        result = self._parse(self.tokenizer.decode(generated, skip_special_tokens=True))
+        text = response["choices"][0]["message"]["content"] or ""
+        result = self._parse(text)
         self._cache[cache_key] = result
         return result.copy()
 
