@@ -52,6 +52,12 @@ class SpeciesClassifier:
     def classify(self, image, box):
         """Return {species, common_name, score} for one detection, or None."""
         crop = self._crop(image, box)
+        return self.classify_crop(crop)
+
+    def classify_crop(self, crop):
+        """Classify a saved PIL image or BGR NumPy crop."""
+        if not isinstance(crop, Image.Image):
+            crop = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
         if self.labels:
             results = self.classifier.predict([crop])
         else:

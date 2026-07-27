@@ -11,8 +11,10 @@ from pathlib import Path
 
 import cv2
 
+from alerts import AlertManager
 from detector import AnimalDetector
 from species import ANIMAL_LABELS, SpeciesClassifier
+from tracker import AnimalTrackRegistry
 
 # Paths resolved from this file, so the pipeline works from any working directory.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +34,8 @@ CSV_FIELDS = [
     "species_confidence",  # BioCLIP "accuracy"
     "hazard",            # Gemma: safe / dangerous
     "danger_score",       # Gemma: 1 (least dangerous) to 10 (most dangerous)
+    "track_id",
+    "confirmed",
     "x1", "y1", "x2", "y2",
 ]
 
@@ -43,7 +47,9 @@ class WildlifePipeline:
     """Loads the three models once, then runs them over any images you give it."""
 
     def __init__(self, conf=0.35, use_hazard=True, species_labels=None,
-                 gemma_model_repo=None, gemma_model_file=None):
+                 gemma_model_repo=None, gemma_model_file=None,
+                 alert_mode="off", confirmation_frames=3,
+                 max_missed_frames=30):
         # yolo11l.pt auto-downloads by name if the local weight isn't present yet
         # (e.g. a fresh teammate machine or a fresh container).
         weights = str(YOLO_WEIGHTS) if YOLO_WEIGHTS.exists() else "yolo11l.pt"
@@ -69,35 +75,58 @@ class WildlifePipeline:
         # Where results go. run() can override this per batch.
         self.output_dir = OUTPUT_DIR
         self.csv_path = CSV_PATH
+        self.alerts = AlertManager(mode=alert_mode)
+        self.tracks = AnimalTrackRegistry(
+            confirmation_frames=confirmation_frames,
+            max_missed_frames=max_missed_frames,
+        )
 
     # ------------------------------------------------------------------ per image
 
     def process_image(self, image_path):
-        """Detect -> identify -> assess -> save annotated image. Returns detections."""
+        """Track one frame, classify confirmed objects, and handle new alerts."""
         image = cv2.imread(str(image_path))
         if image is None:
             raise FileNotFoundError(f"Could not read image: {image_path}")
 
         detections = self.detector.detect(image)
-        for det in detections:
-            # YOLO reports coarse COCO labels; only send actual animals to BioCLIP.
-            if det["label"] not in ANIMAL_LABELS:
-                continue
+        animal_detections = [
+            det for det in detections if det["label"] in ANIMAL_LABELS
+        ]
+        self.tracks.update(animal_detections, image, image_path)
 
-            species = self.species.classify(image, det["box"])
-            if not species:
-                continue
-            det["species"] = species["species"]
-            det["common_name"] = species["common_name"]
-            det["species_confidence"] = species["score"]
-
-            if self.hazard:
-                verdict = self.hazard.assess(
-                    det.get("common_name", ""),
-                    det["species"],
+        for track in self.tracks.needing_classification():
+            try:
+                species = self.species.classify_crop(track.best_crop)
+            except Exception as exc:
+                print(
+                    f"  [track {track.track_id}] species classification failed: "
+                    f"{type(exc).__name__}: {exc}"
                 )
-                det["hazard"] = verdict["hazard"]
-                det["danger_score"] = verdict["danger_score"]
+                continue
+            if not species:
+                print(f"  [track {track.track_id}] species classification unavailable")
+                continue
+
+            verdict = None
+            if self.hazard:
+                try:
+                    verdict = self.hazard.assess(
+                        species.get("common_name", ""),
+                        species["species"],
+                    )
+                except Exception as exc:
+                    print(
+                        f"  [track {track.track_id}] hazard classification failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    continue
+            track.apply_classification(species, verdict)
+
+        # Classification happens after the registry's initial enrichment, so
+        # copy newly available labels back onto this frame's detections.
+        self.tracks.enrich_detections(animal_detections)
+        self.alerts.handle_tracks(image_path, self.tracks.alert_candidates())
 
         self._save_annotated(image, image_path, detections)
         return detections
@@ -109,10 +138,17 @@ class WildlifePipeline:
         # Prefer BioCLIP's identification: common name, then scientific name.
         # Only fall back to YOLO's coarse label when there's no species at all.
         if det.get("common_name"):
-            return f"{det['common_name']} {det['species_confidence']:.2f}"
-        if det.get("species"):
-            return f"{det['species']} {det['species_confidence']:.2f}"
-        return f"{det['label']} {det['confidence']:.2f}"
+            text = f"{det['common_name']} {det['species_confidence']:.2f}"
+        elif det.get("species"):
+            text = f"{det['species']} {det['species_confidence']:.2f}"
+        else:
+            text = f"{det['label']} {det['confidence']:.2f}"
+
+        if det.get("track_id") is not None:
+            text = f"ID {det['track_id']} {text}"
+        if not det.get("confirmed") and det.get("consecutive_seen"):
+            text += f" [candidate {det['consecutive_seen']}]"
+        return text
 
     def _save_annotated(self, image, image_path, detections):
         # Scale line/text weight to the image so labels are legible at any resolution.
@@ -168,7 +204,11 @@ class WildlifePipeline:
                         if "species_confidence" in det else ""
                     ),
                     "hazard": det.get("hazard", ""),
-                    "danger_score": det.get("danger_score", ""),
+                    "danger_score": det.get("danger_score") or "",
+                    "track_id": (
+                        det["track_id"] if det.get("track_id") is not None else ""
+                    ),
+                    "confirmed": det.get("confirmed", ""),
                     "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                 }
             )
@@ -241,7 +281,14 @@ class WildlifePipeline:
 
     @staticmethod
     def _print_detection(det):
-        line = f"  {det['label']} {det['confidence']:.2f}"
+        track = (
+            f" track={det['track_id']}"
+            if det.get("track_id") is not None
+            else " untracked"
+        )
+        line = f"  {det['label']} {det['confidence']:.2f}{track}"
+        if not det.get("confirmed") and det.get("consecutive_seen"):
+            line += f" candidate={det['consecutive_seen']}"
         if det.get("species"):
             name = det.get("common_name") or det["species"]
             line += f" -> {name} ({det['species']}) {det['species_confidence']:.2f}"

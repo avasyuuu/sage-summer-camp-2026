@@ -103,7 +103,37 @@ def main():
         default=os.environ.get("GEMMA_MODEL_FILE"),
         help="Gemma GGUF filename within the Hugging Face repository",
     )
+    alert_group = parser.add_mutually_exclusive_group()
+    alert_group.add_argument(
+        "--alerts",
+        action="store_true",
+        help="send one Twilio trial-template SMS for each dangerous animal track",
+    )
+    alert_group.add_argument(
+        "--alert-dry-run",
+        action="store_true",
+        help="print dangerous-animal alerts without sending SMS",
+    )
+    parser.add_argument(
+        "--confirmation-frames",
+        type=int,
+        default=3,
+        metavar="FRAMES",
+        help="consecutive sightings required to confirm an animal (default: 3)",
+    )
+    parser.add_argument(
+        "--max-missed-frames",
+        type=int,
+        default=30,
+        metavar="FRAMES",
+        help="consecutive misses before forgetting an animal track (default: 30)",
+    )
     args = parser.parse_args()
+
+    if args.confirmation_frames < 1:
+        parser.error("--confirmation-frames must be at least 1")
+    if args.max_missed_frames < 1:
+        parser.error("--max-missed-frames must be at least 1")
 
     # The --baseline flag is the same as choosing baseline at the prompt.
     explicit = "baseline" if args.baseline else args.output
@@ -111,10 +141,15 @@ def main():
     # Ask where results should go before loading the (slow) models.
     output_dir, limit = choose_output_dir(explicit)
 
+    alert_mode = "send" if args.alerts else "dry-run" if args.alert_dry_run else "off"
+
     pipeline = WildlifePipeline(
         use_hazard=not args.no_hazard,
         gemma_model_repo=args.gemma_model_repo,
         gemma_model_file=args.gemma_model_file,
+        alert_mode=alert_mode,
+        confirmation_frames=args.confirmation_frames,
+        max_missed_frames=args.max_missed_frames,
     )
     pipeline.run(args.images, output_dir=output_dir, limit=limit)
 

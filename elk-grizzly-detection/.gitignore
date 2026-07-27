@@ -9,3 +9,7 @@ output/
 
 # macOS
 .DS_Store
+
+# local credentials
+.env
+twilio.env

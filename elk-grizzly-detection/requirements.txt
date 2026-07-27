@@ -7,6 +7,8 @@ pywaggle[vision]==0.56.0
 
 # YOLO detection (8.3.237+ also carries SAM 3 support if it's ever re-added)
 ultralytics==8.4.104
+# Sparse-frame tracker's one-to-one assignment dependency
+lap==0.5.12
 
 # BioCLIP species identification
 pybioclip==2.1.5
@@ -14,3 +16,6 @@ pybioclip==2.1.5
 # Gemma 3 4B hazard assessment using Google's QAT Q4_0 GGUF checkpoint
 llama-cpp-python==0.3.34
 huggingface-hub==1.24.0
+
+# SMS wildlife alerts
+twilio==9.10.9

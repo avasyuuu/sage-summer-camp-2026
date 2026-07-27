@@ -28,7 +28,7 @@ def trusted_checkpoint_load():
 
 
 class AnimalDetector:
-    """Wraps a YOLO model: image array in, list of detection dicts out."""
+    """Wrap YOLO: image frame in, raw detection dictionaries out."""
 
     def __init__(self, model_path="yolo11l.pt", conf=0.35):
         with trusted_checkpoint_load():
@@ -36,7 +36,7 @@ class AnimalDetector:
         self.conf = conf
 
     def detect(self, image):
-        """Return [{label, confidence, box:(x1,y1,x2,y2)}] for a BGR image array."""
+        """Return raw detections; the sparse-frame registry assigns identities."""
         result = self.model(image, conf=self.conf, verbose=False)[0]
 
         detections = []
