@@ -5,7 +5,7 @@
 # Sage plugin runtime + OpenCV/NumPy (the [vision] extra)
 pywaggle[vision]==0.56.0
 
-# YOLO detection (8.3.237+ also carries SAM 3 support if it's ever re-added)
+# YOLO detection
 ultralytics==8.4.104
 # Sparse-frame tracker's one-to-one assignment dependency
 lap==0.5.12
