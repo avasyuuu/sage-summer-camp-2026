@@ -26,7 +26,7 @@ Outputs, in `output/`:
 ### Option A — local (virtual environment)
 
 ```bash
-# from the elk-grizzly-detection/ folder
+# from the danger-detection/ folder
 python -m venv .venv
 # Windows PowerShell:  .venv\Scripts\Activate.ps1
 # macOS / Linux:       source .venv/bin/activate

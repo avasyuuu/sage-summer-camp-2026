@@ -2,7 +2,8 @@
 
 *Last updated: 23 July 2026 · Work spanned 22–23 July 2026.*
 
-Project: **`elk-grizzly-detection`** — a Sage camera plugin that looks at wildlife
+Project: **`danger-detection`** (formerly `elk-grizzly-detection`) — a Sage camera
+plugin that looks at wildlife
 photos and answers three questions in order:
 
 1. **Where is the animal?** → YOLO draws a bounding box.
@@ -169,7 +170,7 @@ After all images: write the single CSV.
 
 ## 4. How to run
 
-Always run from the `elk-grizzly-detection/` folder.
+Always run from the `danger-detection/` folder.
 
 ```bash
 # process every image in test_images/ (the default)

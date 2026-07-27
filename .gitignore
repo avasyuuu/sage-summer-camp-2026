@@ -4,13 +4,15 @@
 # Python
 __pycache__/
 *.pyc
+.venv/
 
-# elk-grizzly-detection generated results
-/elk-grizzly-detection/output/
+# Local credentials — NEVER commit these.
+# Unanchored so they match in any folder, even if the project is renamed.
+.env
+twilio.env
 
-# elk-grizzly-detection model weights - sam3.pt is gated, don't republish it
-/elk-grizzly-detection/*.pt
+# Generated results
+output/
 
-# elk-grizzly-detection local credentials
-/elk-grizzly-detection/.env
-/elk-grizzly-detection/twilio.env
+# Model weights (sam3.pt is gated, don't republish it)
+*.pt

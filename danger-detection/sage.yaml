@@ -1,6 +1,6 @@
-name: "elk-grizzly-detection"
+name: "danger-detection"
 version: "0.1.0"
-description: "Detect elk and grizzlies"
+description: "Detect dangerous animals"
 keywords: ""
 authors: "Avasyu Chukkapalli"
 collaborators: ""
