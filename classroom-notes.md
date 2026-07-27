@@ -438,7 +438,41 @@ means the packages were installed into one Python by hand and never written down
 
 ---
 
-## 10. Timeline
+## 10. SMS alerts & object tracking
+
+Two features layered on top of the detection pipeline (late July 2026).
+
+### SMS alerts (Twilio)
+- When a **dangerous** animal is confirmed, the pipeline texts an alert via Twilio.
+- Credentials live in `twilio.env` (git-ignored): `TWILIO_ACCOUNT_SID`,
+  `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `ALERT_RECIPIENTS` (E.164,
+  comma-separated). The app loads it automatically via `python-dotenv`.
+- Alerts are **mandatory**: if `twilio.env` is missing or invalid, startup
+  *fails* — there is no "alerts off" mode. It sends to every recipient listed.
+- **Trial-account limits:** it can only text **verified** numbers and can't use a
+  custom message body (sends a fixed template). A paid account lifts both.
+
+### Object tracking
+- The pipeline tracks **individual animals across frames**, not just species, so
+  each new dangerous animal alerts **once** — even if it lingers in view for hours.
+- A track must be seen in **3 consecutive frames** before it's confirmed and run
+  through BioCLIP + Gemma (cuts one-frame false alarms). A track is dropped after
+  **30 missed frames**; a returning animal counts as new.
+- Consequence: a **single still image never triggers Gemma or an alert** —
+  nothing gets confirmed. Feed a **sequence** of frames from one fixed camera
+  (see `test_sequences/`).
+- The matcher (`tracker.py`, `AnimalTrackRegistry`) is tuned for sparse
+  fixed-camera stills — it survives YOLO label flips (e.g. bear→cow→bear) and
+  needs the `lap` library.
+
+### Deferred for later
+A dual-camera setup (paired visible + thermal, sometimes a side-by-side composite
+image) with cross-camera sensor fusion was designed but **not built yet** — v1
+assumes one fixed visible-light feed.
+
+---
+
+## 11. Timeline
 
 **22 July 2026**
 - Built the YOLO detection backbone; switched to the YOLO11 model.
@@ -464,3 +498,11 @@ means the packages were installed into one Python by hand and never written down
   kept `detector.py` and `pipeline.py` in sync (see §1.1).
 - Fixed a merge break: `main.py` still passed a removed `context` argument to the
   species-only hazard classifier (`TypeError`).
+
+**26–27 July 2026**
+- Added Twilio SMS alerts for confirmed dangerous animals (mandatory `twilio.env`).
+- Added single-camera object tracking (3-frame confirmation, 30-frame retirement)
+  so each animal alerts once; dropped an earlier per-species cooldown idea.
+- Reverted Gemma from the Q4_0 GGUF / `llama-cpp-python` runtime back to BF16
+  `gemma-3-4b-it` via Transformers (the Thor has enough memory for it).
+- Deferred dual-camera / thermal fusion to a later phase (see §10).
