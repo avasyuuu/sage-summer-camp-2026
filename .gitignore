@@ -1,2 +1,16 @@
 # macOS
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# elk-grizzly-detection generated results
+/elk-grizzly-detection/output/
+
+# elk-grizzly-detection model weights - sam3.pt is gated, don't republish it
+/elk-grizzly-detection/*.pt
+
+# elk-grizzly-detection local credentials
+/elk-grizzly-detection/.env
+/elk-grizzly-detection/twilio.env

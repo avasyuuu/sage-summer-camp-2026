@@ -107,9 +107,9 @@ def main():
     parser.add_argument(
         "--confirmation-frames",
         type=int,
-        default=3,
+        default=1,
         metavar="FRAMES",
-        help="consecutive sightings required to confirm an animal (default: 3)",
+        help="consecutive sightings required to confirm an animal (default: 1)",
     )
     parser.add_argument(
         "--max-missed-frames",

@@ -27,6 +27,8 @@ class TrackedAnimal:
     hazard: str = ""
     danger_score: int | None = None
     classified: bool = False
+    sms_delivered_recipients: set[str] = field(default_factory=set)
+    slack_alerted: bool = False
     alerted: bool = False
     center_history: list[tuple[float, float]] = field(default_factory=list)
     appearance: object = None
@@ -47,7 +49,7 @@ class TrackedAnimal:
 class AnimalTrackRegistry:
     """Associate sparse still-image detections and retain per-object state."""
 
-    def __init__(self, confirmation_frames=3, max_missed_frames=30,
+    def __init__(self, confirmation_frames=1, max_missed_frames=30,
                  max_center_distance=0.35, max_match_cost=0.72,
                  min_scene_similarity=0.80):
         if confirmation_frames < 1:

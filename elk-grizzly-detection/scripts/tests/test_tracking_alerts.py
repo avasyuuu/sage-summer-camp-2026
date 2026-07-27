@@ -1,4 +1,4 @@
-"""State-machine tests for track confirmation and per-object SMS alerts."""
+"""State-machine tests for tracking and multi-channel wildlife alerts."""
 
 import io
 import os
@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from alerts import (  # noqa: E402
@@ -19,6 +19,8 @@ from alerts import (  # noqa: E402
     AlertConfigurationError,
     AlertManager,
     DeliveryResult,
+    SlackAlertSender,
+    SlackDeliveryResult,
     SMSAlertSender,
     load_alert_config,
 )
@@ -62,19 +64,54 @@ def classify_as_dangerous(track):
     )
 
 
-class FakeSender:
-    def __init__(self, succeeds=True):
-        self.succeeds = succeeds
+TEST_BOT_TOKEN = "xoxb-test-bot-token"
+TEST_CHANNEL_ID = "C0123456789"
+
+
+class FakeSMSSender:
+    def __init__(self, outcomes=None, recipients=("+15551232832",)):
+        self.config = type("Config", (), {"recipients": recipients})()
+        self.outcomes = list(outcomes or [True])
         self.calls = []
 
-    def send(self, body):
-        self.calls.append(body)
-        if self.succeeds:
-            return [DeliveryResult("+15551232832", "SM-test", "queued")]
-        return [DeliveryResult("+15551232832", error="test failure")]
+    def send(self, body, recipients=None):
+        targets = tuple(recipients or ())
+        self.calls.append((body, targets))
+        succeeds = self.outcomes.pop(0) if self.outcomes else True
+        if succeeds:
+            return [
+                DeliveryResult(recipient, "SM-test", "queued")
+                for recipient in targets
+            ]
+        return [
+            DeliveryResult(recipient, error="test failure")
+            for recipient in targets
+        ]
+
+
+class FakeSlackSender:
+    def __init__(self, outcomes=None):
+        self.outcomes = list(outcomes or [True])
+        self.calls = []
+
+    def send(self, body, image_path):
+        self.calls.append((body, Path(image_path)))
+        succeeds = self.outcomes.pop(0) if self.outcomes else True
+        if succeeds:
+            return SlackDeliveryResult(status="sent")
+        return SlackDeliveryResult(error="test failure")
 
 
 class TrackRegistryTests(unittest.TestCase):
+    def test_default_confirms_on_first_frame(self):
+        registry = AnimalTrackRegistry()
+
+        confirmed = registry.update([detection(1)], FRAME, "first.jpg")
+
+        self.assertEqual([track.track_id for track in confirmed], [1])
+        self.assertTrue(registry.tracks[1].confirmed)
+        self.assertEqual(registry.tracks[1].consecutive_seen, 1)
+
     def test_confirms_on_third_consecutive_frame(self):
         registry = AnimalTrackRegistry(confirmation_frames=3)
 
@@ -202,15 +239,16 @@ class TrackRegistryTests(unittest.TestCase):
 
 class TrackAlertTests(unittest.TestCase):
     def _confirmed_track(self):
-        registry = AnimalTrackRegistry(confirmation_frames=1)
+        registry = AnimalTrackRegistry()
         track = registry.update([detection(1)], FRAME, "bear.jpg")[0]
         classify_as_dangerous(track)
         return track
 
     def test_successful_delivery_marks_track_alerted(self):
         track = self._confirmed_track()
-        sender = FakeSender()
-        manager = AlertManager(sender=sender)
+        sms = FakeSMSSender()
+        slack = FakeSlackSender()
+        manager = AlertManager(sms_sender=sms, slack_sender=slack)
 
         first = manager.handle_tracks("bear.jpg", [track])
         second = manager.handle_tracks("bear2.jpg", [track])
@@ -218,12 +256,26 @@ class TrackAlertTests(unittest.TestCase):
         self.assertEqual(first[0].status, "sent")
         self.assertEqual(second, [])
         self.assertTrue(track.alerted)
-        self.assertEqual(len(sender.calls), 1)
+        self.assertEqual(len(sms.calls), 1)
+        self.assertEqual(len(slack.calls), 1)
+        self.assertEqual(track.sms_delivered_recipients, {"+15551232832"})
+        self.assertTrue(track.slack_alerted)
+
+    def test_slack_message_has_timestamp_without_image_reference(self):
+        track = self._confirmed_track()
+
+        message = AlertManager._slack_message("secret-image-url.jpg", track)
+
+        self.assertIn("*Time:*", message)
+        self.assertNotIn("*Image:*", message)
+        self.assertNotIn("*Track:*", message)
+        self.assertNotIn("secret-image-url.jpg", message)
 
     def test_failed_delivery_remains_eligible_for_retry(self):
         track = self._confirmed_track()
-        sender = FakeSender(succeeds=False)
-        manager = AlertManager(sender=sender)
+        sms = FakeSMSSender(outcomes=[False, False])
+        slack = FakeSlackSender(outcomes=[False, False])
+        manager = AlertManager(sms_sender=sms, slack_sender=slack)
 
         first = manager.handle_tracks("bear.jpg", [track])
         second = manager.handle_tracks("bear2.jpg", [track])
@@ -231,27 +283,76 @@ class TrackAlertTests(unittest.TestCase):
         self.assertEqual(first[0].status, "failed")
         self.assertEqual(second[0].status, "failed")
         self.assertFalse(track.alerted)
-        self.assertEqual(len(sender.calls), 2)
+        self.assertEqual(len(sms.calls), 2)
+        self.assertEqual(len(slack.calls), 2)
+
+    def test_successful_channel_is_not_duplicated_while_other_retries(self):
+        track = self._confirmed_track()
+        sms = FakeSMSSender(outcomes=[True])
+        slack = FakeSlackSender(outcomes=[False, True])
+        manager = AlertManager(sms_sender=sms, slack_sender=slack)
+
+        first = manager.handle_tracks("bear.jpg", [track])
+        second = manager.handle_tracks("bear2.jpg", [track])
+
+        self.assertEqual(first[0].status, "partial")
+        self.assertEqual(second[0].status, "sent")
+        self.assertEqual(len(sms.calls), 1)
+        self.assertEqual(len(slack.calls), 2)
+        self.assertTrue(track.alerted)
+
+    def test_only_failed_sms_recipient_is_retried(self):
+        first_number = "+15551232832"
+        second_number = "+15551232833"
+
+        class PartialSMSSender(FakeSMSSender):
+            def send(self, body, recipients=None):
+                targets = tuple(recipients or ())
+                self.calls.append((body, targets))
+                if len(self.calls) == 1:
+                    return [
+                        DeliveryResult(first_number, "SM-test", "queued"),
+                        DeliveryResult(second_number, error="test failure"),
+                    ]
+                return [DeliveryResult(second_number, "SM-retry", "queued")]
+
+        track = self._confirmed_track()
+        sms = PartialSMSSender(recipients=(first_number, second_number))
+        slack = FakeSlackSender()
+        manager = AlertManager(sms_sender=sms, slack_sender=slack)
+
+        manager.handle_tracks("bear.jpg", [track])
+        manager.handle_tracks("bear2.jpg", [track])
+
+        self.assertEqual(sms.calls[0][1], (first_number, second_number))
+        self.assertEqual(sms.calls[1][1], (second_number,))
+        self.assertEqual(len(slack.calls), 1)
+        self.assertTrue(track.alerted)
 
     def test_safe_track_does_not_alert(self):
         track = self._confirmed_track()
         track.hazard = "safe"
         track.danger_score = 3
-        sender = FakeSender()
+        sms = FakeSMSSender()
+        slack = FakeSlackSender()
 
-        results = AlertManager(sender=sender).handle_tracks(
+        results = AlertManager(sms_sender=sms, slack_sender=slack).handle_tracks(
             "elk.jpg", [track]
         )
 
         self.assertEqual(results, [])
-        self.assertEqual(sender.calls, [])
+        self.assertEqual(sms.calls, [])
+        self.assertEqual(slack.calls, [])
 
     def test_phone_number_is_masked_in_logs(self):
         track = self._confirmed_track()
         output = io.StringIO()
 
         with redirect_stdout(output):
-            AlertManager(sender=FakeSender()).handle_tracks("bear.jpg", [track])
+            AlertManager(
+                sms_sender=FakeSMSSender(),
+                slack_sender=FakeSlackSender(),
+            ).handle_tracks("bear.jpg", [track])
 
         log = output.getvalue()
         self.assertNotIn("+15551232832", log)
@@ -266,7 +367,9 @@ class AlertConfigurationTests(unittest.TestCase):
             "export TWILIO_ACCOUNT_SID=AC-file-account\n"
             "export TWILIO_AUTH_TOKEN=file-secret-token\n"
             "export TWILIO_FROM_NUMBER=+15551230000\n"
-            f"export ALERT_RECIPIENTS={recipients}\n",
+            f"export ALERT_RECIPIENTS={recipients}\n"
+            f"export SLACK_BOT_TOKEN={TEST_BOT_TOKEN}\n"
+            f"export SLACK_CHANNEL_ID={TEST_CHANNEL_ID}\n",
             encoding="utf-8",
         )
         return path
@@ -281,6 +384,8 @@ class AlertConfigurationTests(unittest.TestCase):
         self.assertEqual(config.auth_token, "file-secret-token")
         self.assertEqual(config.from_number, "+15551230000")
         self.assertEqual(config.recipients, ("+15551232832",))
+        self.assertEqual(config.slack_bot_token, TEST_BOT_TOKEN)
+        self.assertEqual(config.slack_channel_id, TEST_CHANNEL_ID)
         self.assertFalse(hasattr(config, "enabled"))
 
     def test_existing_environment_takes_precedence_over_file(self):
@@ -296,7 +401,7 @@ class AlertConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             missing = Path(directory) / "missing.env"
             with self.assertRaisesRegex(
-                AlertConfigurationError, "Missing Twilio configuration file"
+                AlertConfigurationError, "Missing alert configuration file"
             ):
                 load_alert_config(missing)
 
@@ -306,6 +411,21 @@ class AlertConfigurationTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 with self.assertRaisesRegex(
                     AlertConfigurationError, "E.164"
+                ):
+                    load_alert_config(env_path)
+
+    def test_invalid_slack_bot_token_fails_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = self._write_env(directory)
+            env_path.write_text(
+                env_path.read_text(encoding="utf-8").replace(
+                    TEST_BOT_TOKEN, "not-a-bot-token"
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(
+                    AlertConfigurationError, "SLACK_BOT_TOKEN"
                 ):
                     load_alert_config(env_path)
 
@@ -325,6 +445,8 @@ class AlertConfigurationTests(unittest.TestCase):
             auth_token="file-secret-token",
             from_number="+15551230000",
             recipients=("+15551232832",),
+            slack_bot_token=TEST_BOT_TOKEN,
+            slack_channel_id=TEST_CHANNEL_ID,
         )
         result = SMSAlertSender(config, client=FailingClient()).send("test")[0]
 
@@ -336,6 +458,75 @@ class AlertConfigurationTests(unittest.TestCase):
             *config.recipients,
         ):
             self.assertNotIn(secret, result.error)
+
+    def test_slack_provider_error_redacts_bot_token(self):
+        class FailingClient:
+            def files_upload_v2(self, **kwargs):
+                raise RuntimeError(f"request exposed {TEST_BOT_TOKEN}")
+
+        config = AlertConfig(
+            account_sid="AC-file-account",
+            auth_token="file-secret-token",
+            from_number="+15551230000",
+            recipients=("+15551232832",),
+            slack_bot_token=TEST_BOT_TOKEN,
+            slack_channel_id=TEST_CHANNEL_ID,
+        )
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as image:
+            result = SlackAlertSender(config, client=FailingClient()).send(
+                "test", image.name
+            )
+
+        self.assertIn("<redacted>", result.error)
+        self.assertNotIn(TEST_BOT_TOKEN, result.error)
+
+    def test_slack_requires_ok_response(self):
+        class Client:
+            def files_upload_v2(self, **kwargs):
+                return {"ok": False, "error": "channel_not_found"}
+
+        config = AlertConfig(
+            account_sid="AC-file-account",
+            auth_token="file-secret-token",
+            from_number="+15551230000",
+            recipients=("+15551232832",),
+            slack_bot_token=TEST_BOT_TOKEN,
+            slack_channel_id=TEST_CHANNEL_ID,
+        )
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as image:
+            result = SlackAlertSender(config, client=Client()).send(
+                "test", image.name
+            )
+
+        self.assertFalse(result.succeeded)
+
+    def test_slack_uploads_image_with_alert_message(self):
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def files_upload_v2(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"ok": True}
+
+        config = AlertConfig(
+            account_sid="AC-file-account",
+            auth_token="file-secret-token",
+            from_number="+15551230000",
+            recipients=("+15551232832",),
+            slack_bot_token=TEST_BOT_TOKEN,
+            slack_channel_id=TEST_CHANNEL_ID,
+        )
+        client = Client()
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as image:
+            result = SlackAlertSender(config, client=client).send(
+                "wildlife alert", image.name
+            )
+
+            self.assertTrue(result.succeeded)
+            self.assertEqual(client.calls[0]["channel"], TEST_CHANNEL_ID)
+            self.assertEqual(client.calls[0]["file"], image.name)
+            self.assertEqual(client.calls[0]["initial_comment"], "wildlife alert")
 
 
 if __name__ == "__main__":

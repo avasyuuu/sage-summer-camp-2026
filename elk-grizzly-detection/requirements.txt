@@ -19,6 +19,7 @@ transformers==5.10.1
 accelerate==1.14.0
 huggingface-hub==1.24.0
 
-# SMS wildlife alerts
+# SMS + Slack wildlife alerts
 twilio==9.10.9
+slack-sdk==3.43.0
 python-dotenv==1.2.2

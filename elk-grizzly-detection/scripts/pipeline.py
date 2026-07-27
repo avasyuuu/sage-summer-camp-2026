@@ -11,7 +11,7 @@ from pathlib import Path
 
 import cv2
 
-from alerts import AlertConfig, AlertManager, SMSAlertSender
+from alerts import AlertConfig, AlertManager, SlackAlertSender, SMSAlertSender
 from detector import AnimalDetector
 from species import ANIMAL_LABELS, SpeciesClassifier
 from tracker import AnimalTrackRegistry
@@ -48,11 +48,12 @@ class WildlifePipeline:
 
     def __init__(self, conf=0.35, use_hazard=True, species_labels=None,
                  gemma_model_id=None,
-                 alert_config=None, confirmation_frames=3,
+                 alert_config=None, confirmation_frames=1,
                  max_missed_frames=30):
         # Validate alert configuration before loading any expensive ML models.
         alert_config = alert_config or AlertConfig.from_env()
-        alert_sender = SMSAlertSender(alert_config)
+        sms_sender = SMSAlertSender(alert_config)
+        slack_sender = SlackAlertSender(alert_config)
 
         # yolo11l.pt auto-downloads by name if the local weight isn't present yet
         # (e.g. a fresh teammate machine or a fresh container).
@@ -69,7 +70,10 @@ class WildlifePipeline:
         # Where results go. run() can override this per batch.
         self.output_dir = OUTPUT_DIR
         self.csv_path = CSV_PATH
-        self.alerts = AlertManager(sender=alert_sender)
+        self.alerts = AlertManager(
+            sms_sender=sms_sender,
+            slack_sender=slack_sender,
+        )
         self.tracks = AnimalTrackRegistry(
             confirmation_frames=confirmation_frames,
             max_missed_frames=max_missed_frames,
@@ -120,9 +124,12 @@ class WildlifePipeline:
         # Classification happens after the registry's initial enrichment, so
         # copy newly available labels back onto this frame's detections.
         self.tracks.enrich_detections(animal_detections)
-        self.alerts.handle_tracks(image_path, self.tracks.alert_candidates())
-
-        self._save_annotated(image, image_path, detections)
+        annotated_path = self._save_annotated(image, image_path, detections)
+        self.alerts.handle_tracks(
+            image_path,
+            self.tracks.alert_candidates(),
+            slack_image_path=annotated_path,
+        )
         return detections
 
     # ------------------------------------------------------------------ drawing
