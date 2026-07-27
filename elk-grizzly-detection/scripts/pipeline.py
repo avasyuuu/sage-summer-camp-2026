@@ -11,7 +11,7 @@ from pathlib import Path
 
 import cv2
 
-from alerts import AlertManager
+from alerts import AlertConfig, AlertManager, SMSAlertSender
 from detector import AnimalDetector
 from species import ANIMAL_LABELS, SpeciesClassifier
 from tracker import AnimalTrackRegistry
@@ -47,9 +47,13 @@ class WildlifePipeline:
     """Loads the three models once, then runs them over any images you give it."""
 
     def __init__(self, conf=0.35, use_hazard=True, species_labels=None,
-                 gemma_model_repo=None, gemma_model_file=None,
-                 alert_mode="off", confirmation_frames=3,
+                 gemma_model_id=None,
+                 alert_config=None, confirmation_frames=3,
                  max_missed_frames=30):
+        # Validate alert configuration before loading any expensive ML models.
+        alert_config = alert_config or AlertConfig.from_env()
+        alert_sender = SMSAlertSender(alert_config)
+
         # yolo11l.pt auto-downloads by name if the local weight isn't present yet
         # (e.g. a fresh teammate machine or a fresh container).
         weights = str(YOLO_WEIGHTS) if YOLO_WEIGHTS.exists() else "yolo11l.pt"
@@ -58,24 +62,14 @@ class WildlifePipeline:
 
         self.hazard = None
         if use_hazard:
-            try:
-                from hazard import (
-                    DEFAULT_MODEL_FILE,
-                    DEFAULT_MODEL_REPO,
-                    HazardClassifier,
-                )
+            from hazard import DEFAULT_MODEL_ID, HazardClassifier
 
-                self.hazard = HazardClassifier(
-                    gemma_model_repo or DEFAULT_MODEL_REPO,
-                    gemma_model_file or DEFAULT_MODEL_FILE,
-                )
-            except Exception as e:
-                print(f"[gemma] hazard assessment disabled: {type(e).__name__}: {e}")
+            self.hazard = HazardClassifier(gemma_model_id or DEFAULT_MODEL_ID)
 
         # Where results go. run() can override this per batch.
         self.output_dir = OUTPUT_DIR
         self.csv_path = CSV_PATH
-        self.alerts = AlertManager(mode=alert_mode)
+        self.alerts = AlertManager(sender=alert_sender)
         self.tracks = AnimalTrackRegistry(
             confirmation_frames=confirmation_frames,
             max_missed_frames=max_missed_frames,

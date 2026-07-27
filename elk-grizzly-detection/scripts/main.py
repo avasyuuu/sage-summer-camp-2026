@@ -5,8 +5,14 @@
 import argparse
 import os
 import sys
+from pathlib import Path
 
-from pipeline import OUTPUT_DIR, TEST_IMAGES_DIR, WildlifePipeline
+from alerts import AlertConfigurationError, load_alert_config
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+TEST_IMAGES_DIR = PROJECT_ROOT / "test_images"
+OUTPUT_DIR = PROJECT_ROOT / "output"
 
 
 def _next_subfolder(base):
@@ -94,25 +100,9 @@ def main():
         help="skip the prompt: 'replace', 'new', 'baseline', or a custom folder name",
     )
     parser.add_argument(
-        "--gemma-model-repo",
-        default=os.environ.get("GEMMA_MODEL_REPO"),
-        help="Hugging Face repository containing the Gemma GGUF model",
-    )
-    parser.add_argument(
-        "--gemma-model-file",
-        default=os.environ.get("GEMMA_MODEL_FILE"),
-        help="Gemma GGUF filename within the Hugging Face repository",
-    )
-    alert_group = parser.add_mutually_exclusive_group()
-    alert_group.add_argument(
-        "--alerts",
-        action="store_true",
-        help="send one Twilio trial-template SMS for each dangerous animal track",
-    )
-    alert_group.add_argument(
-        "--alert-dry-run",
-        action="store_true",
-        help="print dangerous-animal alerts without sending SMS",
+        "--gemma-model-id",
+        default=os.environ.get("GEMMA_MODEL_ID"),
+        help="Hugging Face model ID for Gemma (default: google/gemma-3-4b-it)",
     )
     parser.add_argument(
         "--confirmation-frames",
@@ -135,19 +125,25 @@ def main():
     if args.max_missed_frames < 1:
         parser.error("--max-missed-frames must be at least 1")
 
+    try:
+        alert_config = load_alert_config(PROJECT_ROOT / "twilio.env")
+    except AlertConfigurationError as exc:
+        parser.exit(2, f"alert configuration error: {exc}\n")
+
     # The --baseline flag is the same as choosing baseline at the prompt.
     explicit = "baseline" if args.baseline else args.output
 
     # Ask where results should go before loading the (slow) models.
     output_dir, limit = choose_output_dir(explicit)
 
-    alert_mode = "send" if args.alerts else "dry-run" if args.alert_dry_run else "off"
+    # Import the ML pipeline only after alert configuration has passed startup
+    # validation, so a broken deployment fails before loading any model.
+    from pipeline import WildlifePipeline
 
     pipeline = WildlifePipeline(
         use_hazard=not args.no_hazard,
-        gemma_model_repo=args.gemma_model_repo,
-        gemma_model_file=args.gemma_model_file,
-        alert_mode=alert_mode,
+        gemma_model_id=args.gemma_model_id,
+        alert_config=alert_config,
         confirmation_frames=args.confirmation_frames,
         max_missed_frames=args.max_missed_frames,
     )

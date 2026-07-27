@@ -13,9 +13,12 @@ lap==0.5.12
 # BioCLIP species identification
 pybioclip==2.1.5
 
-# Gemma 3 4B hazard assessment using Google's QAT Q4_0 GGUF checkpoint
-llama-cpp-python==0.3.34
+# Gemma 3 4B hazard assessment using the standard BF16 checkpoint through
+# Transformers. Torch is supplied by the CUDA-enabled Sage Thor base image.
+transformers==5.10.1
+accelerate==1.14.0
 huggingface-hub==1.24.0
 
 # SMS wildlife alerts
 twilio==9.10.9
+python-dotenv==1.2.2

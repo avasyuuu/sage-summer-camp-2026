@@ -6,7 +6,7 @@ stages:
 1. **YOLO** (`yolo11n`) detects and localizes animals (bounding boxes).
 2. **BioCLIP** identifies the species in each animal crop (scientific + common name).
 3. **Gemma 3** classifies the BioCLIP result as `safe` or `dangerous` using
-   only the identified species and gives a short reason.
+   only the identified species and assigns a danger score from 1 through 10.
 
 Outputs, in `output/`:
 
@@ -41,8 +41,9 @@ hf auth login
 ```
 
 The first run downloads all model weights (YOLO, BioCLIP, and Gemma). Gemma 3
-4B is substantially larger than the previous 1B model, so allow extra download
-time, disk space, and memory.
+4B is loaded from its standard BF16 Safetensors checkpoint using Hugging Face
+Transformers and PyTorch, so allow roughly 9 GB of persistent model-cache space
+plus additional runtime memory.
 
 ### Option B — Docker (matches the Sage deployment)
 
@@ -51,10 +52,14 @@ machine regardless of local Python setup.
 
 ```bash
 docker build -t elk-detect .
-docker run --rm -v "$(pwd)/output:/app/output" elk-detect
+docker run --rm --gpus all \
+  --mount type=bind,src="$(pwd)/twilio.env",dst=/app/twilio.env,readonly \
+  -v "$(pwd)/output:/app/output" \
+  elk-detect
 ```
 
-The `-v` mount brings the results back out to your `output/` folder.
+The bind mount supplies protected Twilio configuration without copying it into
+the image. The `-v` mount brings results back out to your `output/` folder.
 
 ## Running
 
@@ -69,9 +74,14 @@ python scripts/main.py test_images/d37363s15i5.jpg test_images/d70380s20i3.jpg
 python scripts/main.py --no-hazard
 ```
 
+`scripts/main.py` automatically loads and validates `twilio.env` from the
+project root. Alert delivery is always active for confirmed dangerous tracks;
+there is no alert-off or dry-run mode. Missing or invalid Twilio configuration
+stops startup before any ML model is loaded.
+
 `detections.csv` is rewritten fresh each run, so it always reflects exactly the
-images from that run. Set `GEMMA_MODEL` (or `--gemma-model`) to point at a
-different or local Gemma model.
+images from that run. Set `GEMMA_MODEL_ID` (or `--gemma-model-id`) to point at a
+different Hugging Face Gemma model.
 
 ## Layout
 

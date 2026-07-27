@@ -3,24 +3,27 @@
 import json
 import re
 
-DEFAULT_MODEL_REPO = "google/gemma-3-4b-it-qat-q4_0-gguf"
-DEFAULT_MODEL_FILE = "gemma-3-4b-it-q4_0.gguf"
+DEFAULT_MODEL_ID = "google/gemma-3-4b-it"
 
 
 class HazardClassifier:
     """Classify an identified species by its inherent potential for harm."""
 
-    def __init__(self, model_repo=DEFAULT_MODEL_REPO,
-                 model_file=DEFAULT_MODEL_FILE):
-        from llama_cpp import Llama
-
+    def __init__(self, model_id=DEFAULT_MODEL_ID, inference_pipeline=None):
         self._cache = {}
-        self.model = Llama.from_pretrained(
-            repo_id=model_repo,
-            filename=model_file,
-            n_ctx=2048,
-            n_gpu_layers=-1,
-            verbose=False,
+        self.model_id = model_id
+        if inference_pipeline is not None:
+            self.pipeline = inference_pipeline
+            return
+
+        import torch
+        from transformers import pipeline
+
+        self.pipeline = pipeline(
+            task="image-text-to-text",
+            model=model_id,
+            device_map="auto",
+            dtype=torch.bfloat16,
         )
 
     @staticmethod
@@ -52,6 +55,40 @@ class HazardClassifier:
             )
         return {"hazard": hazard, "danger_score": danger_score}
 
+    @staticmethod
+    def _generated_text(response):
+        """Extract generated text from a Transformers pipeline response."""
+        if not isinstance(response, list) or not response:
+            raise ValueError(f"Gemma returned an invalid response: {response!r}")
+
+        first = response[0]
+        if not isinstance(first, dict) or "generated_text" not in first:
+            raise ValueError(f"Gemma returned an invalid response: {response!r}")
+
+        generated = first["generated_text"]
+        if isinstance(generated, str):
+            return generated
+
+        # Some Transformers pipelines return a chat message list even when
+        # return_full_text=False. Accept that shape without coupling the rest
+        # of the classifier to a specific Transformers patch release.
+        if isinstance(generated, list) and generated:
+            message = generated[-1]
+            if isinstance(message, dict):
+                content = message.get("content", "")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    text_parts = [
+                        part.get("text", "")
+                        for part in content
+                        if isinstance(part, dict) and part.get("type") == "text"
+                    ]
+                    if text_parts:
+                        return "".join(text_parts)
+
+        raise ValueError(f"Gemma returned an invalid response: {response!r}")
+
     def assess(self, common_name, species):
         """Return a species-based hazard label and danger score from 1-10."""
         # Equivalent species always receive the same assessment, regardless of
@@ -80,31 +117,20 @@ assessment of the immediate risk from one particular animal.
 Return only JSON in exactly this shape:
 {{"hazard":"safe|dangerous","danger_score":1}}"""
 
-        response = self.model.create_chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=80,
-            temperature=0.0,
-            response_format={
-                "type": "json_object",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "hazard": {
-                            "type": "string",
-                            "enum": ["safe", "dangerous"],
-                        },
-                        "danger_score": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 10,
-                        },
-                    },
-                    "required": ["hazard", "danger_score"],
-                    "additionalProperties": False,
-                },
+        response = self.pipeline(
+            text=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": prompt}],
+                }
+            ],
+            return_full_text=False,
+            generate_kwargs={
+                "max_new_tokens": 80,
+                "do_sample": False,
             },
         )
-        text = response["choices"][0]["message"]["content"] or ""
+        text = self._generated_text(response)
         result = self._parse(text)
         self._cache[cache_key] = result
         return result.copy()

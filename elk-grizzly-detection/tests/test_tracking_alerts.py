@@ -1,15 +1,27 @@
 """State-machine tests for track confirmation and per-object SMS alerts."""
 
+import io
+import os
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from alerts import AlertManager, DeliveryResult  # noqa: E402
+from alerts import (  # noqa: E402
+    AlertConfig,
+    AlertConfigurationError,
+    AlertManager,
+    DeliveryResult,
+    SMSAlertSender,
+    load_alert_config,
+)
 from tracker import AnimalTrackRegistry  # noqa: E402
 
 
@@ -195,32 +207,23 @@ class TrackAlertTests(unittest.TestCase):
         classify_as_dangerous(track)
         return track
 
-    def test_dry_run_marks_track_alerted_once(self):
+    def test_successful_delivery_marks_track_alerted(self):
         track = self._confirmed_track()
-        manager = AlertManager("dry-run")
+        sender = FakeSender()
+        manager = AlertManager(sender=sender)
 
         first = manager.handle_tracks("bear.jpg", [track])
         second = manager.handle_tracks("bear2.jpg", [track])
 
-        self.assertEqual(first[0].status, "dry_run")
+        self.assertEqual(first[0].status, "sent")
         self.assertEqual(second, [])
-        self.assertTrue(track.alerted)
-
-    def test_successful_delivery_marks_track_alerted(self):
-        track = self._confirmed_track()
-        sender = FakeSender()
-        manager = AlertManager("send", sender=sender)
-
-        manager.handle_tracks("bear.jpg", [track])
-        manager.handle_tracks("bear2.jpg", [track])
-
         self.assertTrue(track.alerted)
         self.assertEqual(len(sender.calls), 1)
 
     def test_failed_delivery_remains_eligible_for_retry(self):
         track = self._confirmed_track()
         sender = FakeSender(succeeds=False)
-        manager = AlertManager("send", sender=sender)
+        manager = AlertManager(sender=sender)
 
         first = manager.handle_tracks("bear.jpg", [track])
         second = manager.handle_tracks("bear2.jpg", [track])
@@ -236,12 +239,103 @@ class TrackAlertTests(unittest.TestCase):
         track.danger_score = 3
         sender = FakeSender()
 
-        results = AlertManager("send", sender=sender).handle_tracks(
+        results = AlertManager(sender=sender).handle_tracks(
             "elk.jpg", [track]
         )
 
         self.assertEqual(results, [])
         self.assertEqual(sender.calls, [])
+
+    def test_phone_number_is_masked_in_logs(self):
+        track = self._confirmed_track()
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            AlertManager(sender=FakeSender()).handle_tracks("bear.jpg", [track])
+
+        log = output.getvalue()
+        self.assertNotIn("+15551232832", log)
+        self.assertIn("***2832", log)
+
+
+class AlertConfigurationTests(unittest.TestCase):
+    @staticmethod
+    def _write_env(directory, recipients="+15551232832"):
+        path = Path(directory) / "twilio.env"
+        path.write_text(
+            "export TWILIO_ACCOUNT_SID=AC-file-account\n"
+            "export TWILIO_AUTH_TOKEN=file-secret-token\n"
+            "export TWILIO_FROM_NUMBER=+15551230000\n"
+            f"export ALERT_RECIPIENTS={recipients}\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_dotenv_file_loads_and_validates_automatically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = self._write_env(directory)
+            with patch.dict(os.environ, {}, clear=True):
+                config = load_alert_config(env_path)
+
+        self.assertEqual(config.account_sid, "AC-file-account")
+        self.assertEqual(config.auth_token, "file-secret-token")
+        self.assertEqual(config.from_number, "+15551230000")
+        self.assertEqual(config.recipients, ("+15551232832",))
+        self.assertFalse(hasattr(config, "enabled"))
+
+    def test_existing_environment_takes_precedence_over_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = self._write_env(directory)
+            existing = {"TWILIO_AUTH_TOKEN": "deployment-secret-token"}
+            with patch.dict(os.environ, existing, clear=True):
+                config = load_alert_config(env_path)
+
+        self.assertEqual(config.auth_token, "deployment-secret-token")
+
+    def test_missing_dotenv_file_fails_clearly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.env"
+            with self.assertRaisesRegex(
+                AlertConfigurationError, "Missing Twilio configuration file"
+            ):
+                load_alert_config(missing)
+
+    def test_invalid_phone_number_fails_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = self._write_env(directory, recipients="not-a-number")
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(
+                    AlertConfigurationError, "E.164"
+                ):
+                    load_alert_config(env_path)
+
+    def test_provider_error_redacts_credentials(self):
+        class FailingMessages:
+            def create(self, **kwargs):
+                raise RuntimeError(
+                    "request exposed AC-file-account file-secret-token "
+                    "+15551230000 +15551232832"
+                )
+
+        class FailingClient:
+            messages = FailingMessages()
+
+        config = AlertConfig(
+            account_sid="AC-file-account",
+            auth_token="file-secret-token",
+            from_number="+15551230000",
+            recipients=("+15551232832",),
+        )
+        result = SMSAlertSender(config, client=FailingClient()).send("test")[0]
+
+        self.assertIn("<redacted>", result.error)
+        for secret in (
+            config.account_sid,
+            config.auth_token,
+            config.from_number,
+            *config.recipients,
+        ):
+            self.assertNotIn(secret, result.error)
 
 
 if __name__ == "__main__":

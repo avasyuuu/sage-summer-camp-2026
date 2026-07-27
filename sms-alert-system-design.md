@@ -335,3 +335,39 @@ Use separate test sequences:
 Unrelated random animal images remain useful for detector/species/hazard
 regression testing, but they should be run separately from the fixed-camera
 object-tracking sequence.
+
+## Final alert startup decisions (July 27, 2026)
+
+The deployment direction was simplified so alert delivery is always enabled.
+The alert-off and dry-run modes were removed, including the `--alerts`,
+`--alert-dry-run`, and `ALERTS_ENABLED` controls. A confirmed dangerous track
+automatically attempts SMS delivery. Missing or invalid Twilio configuration
+causes a clear startup failure rather than silently disabling alerts.
+
+`twilio.env` is loaded automatically by the Python application; operators do
+not run `source twilio.env`. `python-dotenv` resolves the file relative to the
+project/application root rather than the current working directory. Startup
+immediately validates `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
+`TWILIO_FROM_NUMBER`, and `ALERT_RECIPIENTS` before loading ML models.
+
+For local execution, placing the ignored `twilio.env` in the project root allows
+`python3 scripts/main.py` to work without shell setup. `.dockerignore` prevents
+the credentials from entering the image. For containerized deployment,
+provision the protected file once on the node and mount it read-only at
+`/app/twilio.env`. The existing container entry point starts `main.py`, which
+loads and validates the file automatically on every container start or restart.
+
+## Gemma runtime transition (July 27, 2026)
+
+The Jetson Thor deployment has enough unified memory to run the standard Gemma
+3 4B BF16 checkpoint without four-bit quantization. The hazard classifier was
+therefore changed from the Q4_0 GGUF checkpoint and `llama-cpp-python` runtime
+to `google/gemma-3-4b-it` through Hugging Face Transformers, Accelerate,
+PyTorch, and CUDA. The model is configured with `GEMMA_MODEL_ID` or
+`--gemma-model-id`; the old repository-plus-GGUF-filename settings were removed.
+
+Gemma initialization failures now stop pipeline startup instead of silently
+disabling hazard assessment. The model requires prior acceptance of Google's
+Gemma license and Hugging Face authentication for its initial download. The
+model cache should be mounted on persistent node storage before deployment so
+container restarts do not repeat the approximately 8.6 GB download.
