@@ -1,6 +1,6 @@
 # Wildlife Detection Pipeline — Classroom Notes
 
-*Last updated: 23 July 2026 · Work spanned 22–23 July 2026.*
+*Last updated: 27 July 2026 · Work spanned 22–27 July 2026.*
 
 Project: **`danger-detection`** (formerly `elk-grizzly-detection`) — a Sage camera
 plugin that looks at wildlife
@@ -143,26 +143,33 @@ license-gated). On the first run each downloads automatically into a local cache
 
 ## 3. The scripts and what each does
 
-All code lives in `scripts/`. It was consolidated from 8 messy files into 5
-clean classes, each with one job:
+All code lives in `scripts/`, one job per file:
 
 | File | Class | What it does |
 |---|---|---|
 | `main.py` | — | Command-line entry point. Parses arguments, builds the pipeline, runs it. |
-| `pipeline.py` | `WildlifePipeline` | The conductor. Loads the 3 models once, runs each image through all stages, draws the boxes, and writes the CSV. |
-| `detector.py` | `AnimalDetector` | Wraps **YOLO**. `detect(image)` → list of boxes with a coarse label + confidence. |
-| `species.py` | `SpeciesClassifier` | Wraps **BioCLIP**. `classify(image, box)` → species name, common name, and confidence for one crop. |
-| `hazard.py` | `HazardClassifier` | Wraps **Gemma**. `assess(...)` → `safe`/`dangerous` + a one-line reason. |
+| `pull_images.py` | — | Downloads camera images from the Sage beehive into `query_images/`. |
+| `pipeline.py` | `WildlifePipeline` | The conductor. Loads the models once, runs each image through every stage, draws boxes, writes the CSV. |
+| `detector.py` | `AnimalDetector` | Wraps **YOLO**. `detect(image)` → boxes with a coarse label + confidence. |
+| `species.py` | `SpeciesClassifier` | Wraps **BioCLIP**. Identifies the species in one crop. Auto-selects GPU when available. |
+| `hazard.py` | `HazardClassifier` | Wraps **Gemma**. `assess(...)` → `safe`/`dangerous` + a 1–10 danger score. |
+| `tracker.py` | `AnimalTrackRegistry` | Follows the same animal across frames so it alerts only once. |
+| `alerts.py` | `AlertManager` + senders | Twilio SMS and Slack delivery. |
+| `publisher.py` | `BeehivePublisher` | Publishes detections to Sage (only used when running *on* a node). |
 
 ### How a single image flows through `WildlifePipeline`
 
 1. Read the image.
 2. `AnimalDetector.detect()` → boxes.
-3. For each box whose label is an animal, `SpeciesClassifier.classify()` →
-   species.
-4. If a species was found, `HazardClassifier.assess()` → safe/dangerous.
-5. Draw the boxes + labels and save the annotated image.
-6. Collect one CSV row per detection.
+3. Keep only boxes whose coarse label is an animal; hand them to the tracker,
+   which assigns/updates a **track id** per animal.
+4. For each track needing classification, `SpeciesClassifier` identifies the
+   species from the best crop.
+5. **Ignore any identification below 0.3 confidence** — BioCLIP always returns
+   a best guess, and below that it is guessing.
+6. `HazardClassifier.assess()` → safe/dangerous + score.
+7. Draw boxes + labels, save the annotated image, collect CSV rows.
+8. Confirmed **dangerous** tracks that haven't alerted yet → SMS + Slack.
 
 After all images: write the single CSV.
 
@@ -174,17 +181,28 @@ Always run from the `danger-detection/` folder.
 
 ```bash
 # process every image in test_images/ (the default)
-python scripts/main.py
+python3 scripts/main.py
 
-# process only specific images
-python scripts/main.py test_images/d37363s15i5.jpg test_images/d70380s20i3.jpg
+# process only specific images, or a folder
+python3 scripts/main.py test_images/d70380s20i3.jpg
+python3 scripts/main.py query_images
 
-# tell Gemma the real setting (improves the safety judgment)
-python scripts/main.py --context "Camera beside a campground in northern Wisconsin"
+# skip the slow Gemma step while testing (no hazard, no alerts)
+python3 scripts/main.py --no-hazard
 
-# skip the slow Gemma step while testing (hazard columns left blank)
-python scripts/main.py --no-hazard
+# just the first 5 images, into output/baseline
+python3 scripts/main.py --baseline
 ```
+
+**The real workflow** — pull images from Sage, then process them:
+
+```bash
+python3 scripts/pull_images.py --start -6h    # into query_images/
+python3 scripts/main.py query_images
+```
+
+`pull_images.py` defaults to node `H00F`; use `--vsn H03B` for our own node
+once it is deployed.
 
 ---
 
@@ -216,7 +234,9 @@ image is accounted for). Rewritten fresh each run — no duplicate rows.
 | `common_name` | BioCLIP common name (may be blank for some taxa) |
 | `species_confidence` | **BioCLIP's accuracy — the number to trust** |
 | `hazard` | Gemma's verdict: `safe` or `dangerous` |
-| `reason` | Gemma's one-line justification |
+| `danger_score` | Gemma's 1–10 severity rating |
+| `track_id` | which tracked animal this is (alerts fire once per track) |
+| `confirmed` | whether the track met the confirmation threshold |
 | `x1,y1,x2,y2` | box corner pixel coordinates |
 
 Load it for analysis with pandas:
@@ -309,6 +329,23 @@ that no longer existed. **Fix:** rebuild the `.venv` properly (`python -m venv
 .venv` + full `pip install -r requirements.txt`), then pin VS Code's interpreter
 to it (§8.5). Underlying lesson: commit to **one** environment instead of letting
 tools spawn new ones. See §8.
+
+### 7.9 A folder rename silently disabled `.gitignore` (near-miss)
+The root `.gitignore` used **anchored** paths:
+`/elk-grizzly-detection/twilio.env`, `/elk-grizzly-detection/*.pt`. Renaming the
+folder to `danger-detection/` made every one of those rules stop matching, so
+the next commit swept in real Twilio credentials, a 50 MB model file, and 38
+output images. Caught before pushing. **Fix:** use **unanchored** patterns
+(`twilio.env`, `*.pt`, `output/`) that match in any folder and survive renames.
+**Lesson:** after renaming a directory, run
+`git check-ignore -v <path/to/secret>` to confirm the rules still bite.
+
+### 7.10 `ModuleNotFoundError` for a package that IS in requirements
+Slack alerts failed with `No module named 'slack_sdk'` even though
+`slack-sdk==3.43.0` was listed. The venv had simply been created *before* that
+line was added. **Lesson:** when an import fails for something requirements
+clearly lists, the environment has drifted — re-run
+`pip install -r requirements.txt` rather than debugging the code.
 
 ### 7.8 "It worked before through Docker" (it didn't)
 A common misconception: believing `python main.py` ran through Docker. It never
@@ -426,16 +463,66 @@ means the packages were installed into one Python by hand and never written down
 
 ## 9. Known limitations & next steps
 
-- **SAM 3** (text-prompt detection, an alternative to YOLO) was explored but its
-  weights are license-gated on Hugging Face and access was still pending, so it's
-  not in the current pipeline.
-- **Constrained species list:** BioCLIP currently searches the *entire* tree of
-  life. Giving it a fixed list of target species (elk, grizzly, etc.) would kill
-  most of the low-confidence noise. Supported via `species_labels=[...]`.
-- **Gemma reasoning** is occasionally muddled (e.g. calling a 0.89-confidence ID
-  "low confidence"). Tunable via the prompt in `hazard.py`.
+- **Our nodes have no camera yet.** H03B and H02C are online and publish system
+  metrics (CPU, thermal, network) but **zero images**. Until a camera plugin is
+  scheduled on them there is nothing of ours to detect on — we pull from H00F
+  instead. *Open question for the instructor, along with the capture interval.*
+- **Duplicate alerts.** YOLO sometimes draws two boxes on one animal, creating
+  two tracks and therefore two alerts for the same wolf. Needs box merging or
+  stricter matching.
+- **Constrained species list:** BioCLIP searches the *entire* tree of life.
+  Giving it a fixed list of target species would cut noise further than the
+  confidence floor alone. Supported via `species_labels=[...]`.
 - **Capture time:** the pipeline records processing time, not photo time. For
-  time-of-day analysis, read it from the image later.
+  time-of-day analysis, read it from the image metadata.
+- **SAM 3** was explored early but its weights are license-gated and access
+  never came through, so it was removed.
+
+---
+
+## 9.5 Where things actually run (current architecture)
+
+This changed a lot, so it is worth stating plainly.
+
+```
+Sage node (camera)  ──uploads images──►  Sage beehive
+                                              │
+                            pull_images.py ───┘
+                                              ▼
+                                    query_images/  (on the DGX Spark)
+                                              │
+                              YOLO → BioCLIP → Gemma   (all on the Spark)
+                                              ▼
+                                    Twilio SMS + Slack
+```
+
+**Everything runs on one machine we control** (a DGX Spark). Sage is only the
+**image source**. Reasons:
+
+1. **Nodes have restricted outbound networking** — a node cannot reach Twilio
+   or Slack directly, so alerting from the node was never going to work.
+2. **Gemma is big.** The BF16 4B checkpoint is ~8 GB; that does not fit an 8 GB
+   Xavier NX at all, and even on bigger hardware it's heavy for an edge box.
+3. **Credentials stay off the nodes entirely** — no secrets in the repo, in the
+   container, or on Sage. This removed a whole class of deployment problems.
+
+**Consequence:** the Sage app / `Dockerfile` / `publisher.py` path is built but
+**not in use**. It exists for later, when nodes are deployed and we might want
+detection running on-node (publishing to the beehive instead of alerting).
+
+### The DGX Spark setup (what mattered)
+
+- GPU is an **NVIDIA GB10** (Grace Blackwell, `sm_121`), CUDA 13.0.
+- `pip install -r requirements.txt` pulled the right build automatically
+  (`torch 2.13.0+cu130`) — no manual index URL needed.
+- **On Blackwell, always test a real matmul**, not just
+  `torch.cuda.is_available()`. `is_available()` can report `True` while kernels
+  fail with *"no kernel image is available for execution on the device"* if the
+  torch build predates the GPU's compute capability.
+- **BioCLIP needed an explicit device.** pybioclip defaults to `device='cpu'`,
+  so it silently stayed on the CPU while YOLO and Gemma used CUDA.
+  `SpeciesClassifier` now auto-selects `cuda` and falls back to `cpu`, so the
+  same code is fast on the Spark and still works on a Mac.
 
 ---
 
@@ -448,20 +535,21 @@ Two features layered on top of the detection pipeline (late July 2026).
 - Credentials live in `twilio.env` (git-ignored): `TWILIO_ACCOUNT_SID`,
   `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `ALERT_RECIPIENTS` (E.164,
   comma-separated). The app loads it automatically via `python-dotenv`.
-- Alerts are **mandatory**: if `twilio.env` is missing or invalid, startup
-  *fails* — there is no "alerts off" mode. It sends to every recipient listed.
+- **Missing credentials no longer stop the run.** If `twilio.env` is absent or
+  invalid, the pipeline logs `Twilio message failed` / `Slack message failed`
+  and keeps saving images and CSV rows. (It used to hard-exit at startup; that
+  made the code undeployable anywhere without credentials.)
+- Slack posts the annotated image alongside the text, via `slack_sdk`.
 - **Trial-account limits:** it can only text **verified** numbers and can't use a
   custom message body (sends a fixed template). A paid account lifts both.
 
 ### Object tracking
 - The pipeline tracks **individual animals across frames**, not just species, so
   each new dangerous animal alerts **once** — even if it lingers in view for hours.
-- A track must be seen in **3 consecutive frames** before it's confirmed and run
-  through BioCLIP + Gemma (cuts one-frame false alarms). A track is dropped after
-  **30 missed frames**; a returning animal counts as new.
-- Consequence: a **single still image never triggers Gemma or an alert** —
-  nothing gets confirmed. Feed a **sequence** of frames from one fixed camera
-  (see `test_sequences/`).
+- Confirmation now defaults to **1 frame** (it was 3 early on), so a single
+  still *does* classify and alert. Raise it with `--confirmation-frames 3` if
+  one-frame false alarms become a problem. A track is dropped after **30 missed
+  frames**; a returning animal counts as new.
 - The matcher (`tracker.py`, `AnimalTrackRegistry`) is tuned for sparse
   fixed-camera stills — it survives YOLO label flips (e.g. bear→cow→bear) and
   needs the `lap` library.
@@ -507,3 +595,19 @@ assumes one fixed visible-light feed.
 - Reverted Gemma from the Q4_0 GGUF / `llama-cpp-python` runtime back to BF16
   `gemma-3-4b-it` via Transformers (the Thor has enough memory for it).
 - Deferred dual-camera / thermal fusion to a later phase (see §10).
+
+**27 July 2026**
+- Renamed the project `elk-grizzly-detection` → `danger-detection`. The old
+  `.gitignore` rules were anchored to the old folder name, so the rename
+  silently disabled them and swept `twilio.env` into a commit — caught before
+  pushing (see §7.9).
+- Added `pull_images.py`: download node camera images from the beehive.
+- **Architecture pivot** — everything now runs on the DGX Spark, with Sage as
+  the image source only (see §9.5).
+- Added a no-credentials failsafe so detection runs without Twilio/Slack.
+- Fixed BioCLIP silently running on CPU on a GPU machine.
+- Added a **0.3 confidence floor** on species identification, so garbage guesses
+  (0.02, 0.09) no longer reach Gemma or trigger alerts.
+- Removed the separate off-node watcher; its query and alert code already lived
+  in `pull_images.py` and `alerts.py`.
+- Set up the Spark end to end: GPU verified, full pipeline, real SMS + Slack.

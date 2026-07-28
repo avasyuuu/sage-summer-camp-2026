@@ -91,6 +91,13 @@ def main():
         help="skip the Gemma hazard step (faster; hazard columns left blank)",
     )
     parser.add_argument(
+        "--min-species-confidence",
+        type=float,
+        default=None,
+        help="ignore BioCLIP identifications below this confidence "
+             "(default: 0.3)",
+    )
+    parser.add_argument(
         "--publish",
         action="store_true",
         help="publish dangerous detections + annotated images to the Sage "
@@ -161,6 +168,8 @@ def main():
             confirmation_frames=args.confirmation_frames,
             max_missed_frames=args.max_missed_frames,
             publisher=publisher,
+            **({"min_species_confidence": args.min_species_confidence}
+               if args.min_species_confidence is not None else {}),
         )
         pipeline.run(args.images, output_dir=output_dir, limit=limit)
     finally:

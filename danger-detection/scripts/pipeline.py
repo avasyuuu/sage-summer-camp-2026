@@ -32,6 +32,10 @@ YOLO_WEIGHTS = PROJECT_ROOT / "yolo11l.pt"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
+# Ignore BioCLIP identifications below this confidence. Below roughly 0.3 the
+# model is guessing, and assessing/alerting on those produces noise.
+MIN_SPECIES_CONFIDENCE = 0.3
+
 CSV_FIELDS = [
     "image",
     "detected_as",       # YOLO's coarse COCO label
@@ -56,7 +60,8 @@ class WildlifePipeline:
     def __init__(self, conf=0.35, use_hazard=True, species_labels=None,
                  gemma_model_id=None,
                  alert_config=None, confirmation_frames=1,
-                 max_missed_frames=30, publisher=None):
+                 max_missed_frames=30, publisher=None,
+                 min_species_confidence=MIN_SPECIES_CONFIDENCE):
         # Resolve alert configuration before loading any expensive ML models.
         # Without usable credentials we degrade to detection-only rather than
         # failing, so the plugin still runs (e.g. a node with no twilio.env).
@@ -90,6 +95,7 @@ class WildlifePipeline:
         self.csv_path = CSV_PATH
         # NullPublisher unless --publish is used, so local runs are unchanged.
         self.publisher = publisher or NullPublisher()
+        self.min_species_confidence = min_species_confidence
         self.alerts = AlertManager(
             sms_sender=sms_sender,
             slack_sender=slack_sender,
@@ -125,6 +131,18 @@ class WildlifePipeline:
                 continue
             if not species:
                 print(f"  [track {track.track_id}] species classification unavailable")
+                continue
+
+            # BioCLIP always returns its best guess, even when that guess is
+            # meaningless (e.g. 0.02). Assessing those wastes a Gemma call and
+            # can raise a bogus alert, so ignore anything under the floor.
+            score = species.get("score", 0.0)
+            if score < self.min_species_confidence:
+                print(
+                    f"  [track {track.track_id}] ignored: species confidence "
+                    f"{score:.2f} < {self.min_species_confidence:.2f} "
+                    f"({species.get('species') or 'unknown'})"
+                )
                 continue
 
             verdict = None
