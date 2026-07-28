@@ -1,6 +1,13 @@
-# from waggle.plugin import Plugin
-# from waggle.data.vision import Camera
-"""Run the wildlife pipeline (YOLO -> BioCLIP -> Gemma) over images."""
+"""Run the wildlife pipeline (YOLO -> BioCLIP -> Gemma) over images.
+
+Beehive publishing lives in `publisher.py`, not here: `from waggle.plugin
+import Plugin` and the `plugin.publish()` / `plugin.upload_file()` calls are
+inside `open_publisher()` and `BeehivePublisher`. They are imported lazily so
+this runs on machines with no Waggle runtime; pass --publish to enable them.
+
+Not implemented yet: `waggle.data.vision.Camera`. Images currently come from a
+folder (see `pull_images.py`), not from a node's camera.
+"""
 
 import argparse
 import os
