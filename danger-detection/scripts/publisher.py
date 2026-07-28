@@ -11,12 +11,9 @@ with meta carrying species, common name, and the track id the watcher uses to
 avoid alerting twice for the same animal.
 """
 
-# Sage uses dot-separated measurement names. We publish two:
-#   env.detection.species    every identified animal (value = species confidence)
-#   env.detection.dangerous  only dangerous ones      (value = danger score 1-10)
-# Publishing both means a consumer can query all wildlife occurrences, or filter
-# straight to the ones worth alerting on, without parsing meta.
-MEASUREMENT_SPECIES = "env.detection.species"
+# Sage uses dot-separated measurement names. Only dangerous animals are
+# published: safe sightings would be far more records for little value, and
+# the beehive is shared infrastructure.
 MEASUREMENT_DANGEROUS = "env.detection.dangerous"
 
 
@@ -52,26 +49,15 @@ class BeehivePublisher:
 
     def publish_track(self, track, image_name, annotated_path=None,
                       timestamp=None):
-        """Publish one classified track; upload the image if it's dangerous."""
-        meta = _meta_for(track, image_name)
-        dangerous = str(track.hazard or "").lower() == "dangerous"
+        """Publish a dangerous track and upload its annotated image.
 
-        # Every identified animal is occurrence data worth keeping, not just
-        # the dangerous ones.
-        try:
-            self._publish(
-                MEASUREMENT_SPECIES,
-                float(getattr(track, "species_confidence", 0.0) or 0.0),
-                meta,
-                timestamp,
-            )
-            print(f"  [beehive] published {MEASUREMENT_SPECIES} "
-                  f"track={track.track_id} {track.species or 'unknown'}")
-        except Exception as exc:
-            print(f"  [beehive] publish failed: {type(exc).__name__}: {exc}")
-
-        if not dangerous:
+        Safe animals are deliberately not published - they would be far more
+        records for little value on shared infrastructure.
+        """
+        if str(track.hazard or "").lower() != "dangerous":
             return
+
+        meta = _meta_for(track, image_name)
 
         try:
             # Value is the danger score so a consumer can filter on severity.

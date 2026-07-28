@@ -170,8 +170,8 @@ class WildlifePipeline:
         # Publish to the beehive before alerting. On a real node this is the
         # only outbound path: an off-node watcher polls the Sage data API and
         # sends the SMS/Slack messages, because nodes can't reach them directly.
-        # Publish every newly identified animal (occurrence data), not just the
-        # dangerous ones; publish_track uploads the image only when dangerous.
+        # Only dangerous tracks are published (publish_track skips the rest),
+        # to keep the beehive free of routine safe-animal records.
         for track in newly_classified:
             self.publisher.publish_track(
                 track, Path(image_path).name, annotated_path
