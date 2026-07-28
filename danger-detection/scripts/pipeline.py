@@ -120,6 +120,7 @@ class WildlifePipeline:
         ]
         self.tracks.update(animal_detections, image, image_path)
 
+        newly_classified = []
         for track in self.tracks.needing_classification():
             try:
                 species = self.species.classify_crop(track.best_crop)
@@ -159,6 +160,7 @@ class WildlifePipeline:
                     )
                     continue
             track.apply_classification(species, verdict)
+            newly_classified.append(track)
 
         # Classification happens after the registry's initial enrichment, so
         # copy newly available labels back onto this frame's detections.
@@ -168,7 +170,9 @@ class WildlifePipeline:
         # Publish to the beehive before alerting. On a real node this is the
         # only outbound path: an off-node watcher polls the Sage data API and
         # sends the SMS/Slack messages, because nodes can't reach them directly.
-        for track in self.tracks.alert_candidates():
+        # Publish every newly identified animal (occurrence data), not just the
+        # dangerous ones; publish_track uploads the image only when dangerous.
+        for track in newly_classified:
             self.publisher.publish_track(
                 track, Path(image_path).name, annotated_path
             )

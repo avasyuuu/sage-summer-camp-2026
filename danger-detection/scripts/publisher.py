@@ -11,6 +11,12 @@ with meta carrying species, common name, and the track id the watcher uses to
 avoid alerting twice for the same animal.
 """
 
+# Sage uses dot-separated measurement names. We publish two:
+#   env.detection.species    every identified animal (value = species confidence)
+#   env.detection.dangerous  only dangerous ones      (value = danger score 1-10)
+# Publishing both means a consumer can query all wildlife occurrences, or filter
+# straight to the ones worth alerting on, without parsing meta.
+MEASUREMENT_SPECIES = "env.detection.species"
 MEASUREMENT_DANGEROUS = "env.detection.dangerous"
 
 
@@ -38,16 +44,42 @@ class BeehivePublisher:
     def __init__(self, plugin):
         self.plugin = plugin
 
-    def publish_track(self, track, image_name, annotated_path=None):
-        """Publish one confirmed dangerous track, and upload its image."""
+    def _publish(self, name, value, meta, timestamp=None):
+        kwargs = {"meta": meta}
+        if timestamp is not None:
+            kwargs["timestamp"] = timestamp
+        self.plugin.publish(name, value, **kwargs)
+
+    def publish_track(self, track, image_name, annotated_path=None,
+                      timestamp=None):
+        """Publish one classified track; upload the image if it's dangerous."""
         meta = _meta_for(track, image_name)
+        dangerous = str(track.hazard or "").lower() == "dangerous"
+
+        # Every identified animal is occurrence data worth keeping, not just
+        # the dangerous ones.
+        try:
+            self._publish(
+                MEASUREMENT_SPECIES,
+                float(getattr(track, "species_confidence", 0.0) or 0.0),
+                meta,
+                timestamp,
+            )
+            print(f"  [beehive] published {MEASUREMENT_SPECIES} "
+                  f"track={track.track_id} {track.species or 'unknown'}")
+        except Exception as exc:
+            print(f"  [beehive] publish failed: {type(exc).__name__}: {exc}")
+
+        if not dangerous:
+            return
 
         try:
-            # Value is the danger score so a watcher can filter on severity.
-            self.plugin.publish(
+            # Value is the danger score so a consumer can filter on severity.
+            self._publish(
                 MEASUREMENT_DANGEROUS,
                 int(track.danger_score or 0),
-                meta=meta,
+                meta,
+                timestamp,
             )
             print(f"  [beehive] published {MEASUREMENT_DANGEROUS} "
                   f"track={track.track_id} score={track.danger_score}")
@@ -68,7 +100,8 @@ class BeehivePublisher:
 class NullPublisher:
     """Used when --publish is off, so the pipeline needs no special-casing."""
 
-    def publish_track(self, track, image_name, annotated_path=None):
+    def publish_track(self, track, image_name, annotated_path=None,
+                      timestamp=None):
         return
 
 
