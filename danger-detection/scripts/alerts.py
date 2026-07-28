@@ -243,9 +243,12 @@ class AlertResult:
 class AlertManager:
     """Deliver each dangerous-track alert once through every configured channel."""
 
-    def __init__(self, sms_sender, slack_sender):
+    def __init__(self, sms_sender, slack_sender, enabled=True):
         self._sms_sender = sms_sender
         self._slack_sender = slack_sender
+        # When credentials are missing/invalid we still run detection and report
+        # what *would* have been sent, instead of failing the whole pipeline.
+        self._enabled = enabled
 
     @staticmethod
     def _intended_message(image_path, track):
@@ -283,6 +286,22 @@ class AlertManager:
 
             intended = self._intended_message(image_path, track)
             print(f"  [alert] intended message: {intended}")
+
+            if not self._enabled:
+                # No usable credentials: report the failure and keep going so the
+                # annotated image and CSV row are still produced.
+                print("  [alert] Twilio message failed: alerts disabled "
+                      "(missing or invalid credentials)")
+                print("  [alert] Slack message failed: alerts disabled "
+                      "(missing or invalid credentials)")
+                results.append(
+                    AlertResult(
+                        status="disabled",
+                        track_id=track.track_id,
+                        intended_message=intended,
+                    )
+                )
+                continue
 
             required_recipients = self._sms_sender.config.recipients
             pending_recipients = tuple(

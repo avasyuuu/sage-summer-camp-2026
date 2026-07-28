@@ -11,7 +11,13 @@ from pathlib import Path
 
 import cv2
 
-from alerts import AlertConfig, AlertManager, SlackAlertSender, SMSAlertSender
+from alerts import (
+    AlertConfig,
+    AlertConfigurationError,
+    AlertManager,
+    SlackAlertSender,
+    SMSAlertSender,
+)
 from detector import AnimalDetector
 from species import ANIMAL_LABELS, SpeciesClassifier
 from tracker import AnimalTrackRegistry
@@ -50,10 +56,21 @@ class WildlifePipeline:
                  gemma_model_id=None,
                  alert_config=None, confirmation_frames=1,
                  max_missed_frames=30):
-        # Validate alert configuration before loading any expensive ML models.
-        alert_config = alert_config or AlertConfig.from_env()
-        sms_sender = SMSAlertSender(alert_config)
-        slack_sender = SlackAlertSender(alert_config)
+        # Resolve alert configuration before loading any expensive ML models.
+        # Without usable credentials we degrade to detection-only rather than
+        # failing, so the plugin still runs (e.g. a node with no twilio.env).
+        if alert_config is None:
+            try:
+                alert_config = AlertConfig.from_env()
+            except AlertConfigurationError:
+                alert_config = None
+
+        alerts_enabled = alert_config is not None
+        sms_sender = SMSAlertSender(alert_config) if alerts_enabled else None
+        slack_sender = SlackAlertSender(alert_config) if alerts_enabled else None
+        if not alerts_enabled:
+            print("[alerts] disabled: no valid Twilio/Slack credentials. "
+                  "Detection results will still be saved.")
 
         # yolo11l.pt auto-downloads by name if the local weight isn't present yet
         # (e.g. a fresh teammate machine or a fresh container).
@@ -73,6 +90,7 @@ class WildlifePipeline:
         self.alerts = AlertManager(
             sms_sender=sms_sender,
             slack_sender=slack_sender,
+            enabled=alerts_enabled,
         )
         self.tracks = AnimalTrackRegistry(
             confirmation_frames=confirmation_frames,

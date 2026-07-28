@@ -128,7 +128,12 @@ def main():
     try:
         alert_config = load_alert_config(PROJECT_ROOT / "twilio.env")
     except AlertConfigurationError as exc:
-        parser.exit(2, f"alert configuration error: {exc}\n")
+        # Don't kill the run: a node without credentials should still detect,
+        # annotate, and log. Alerts report themselves as failed instead.
+        print(f"[alerts] configuration unavailable: {exc}")
+        print("[alerts] running in detection-only mode - Twilio and Slack "
+              "messages will NOT be sent.")
+        alert_config = None
 
     # The --baseline flag is the same as choosing baseline at the prompt.
     explicit = "baseline" if args.baseline else args.output
