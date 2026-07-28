@@ -61,7 +61,8 @@ class WildlifePipeline:
                  gemma_model_id=None,
                  alert_config=None, confirmation_frames=1,
                  max_missed_frames=30, publisher=None,
-                 min_species_confidence=MIN_SPECIES_CONFIDENCE):
+                 min_species_confidence=MIN_SPECIES_CONFIDENCE,
+                 state_file=None):
         # Resolve alert configuration before loading any expensive ML models.
         # Without usable credentials we degrade to detection-only rather than
         # failing, so the plugin still runs (e.g. a node with no twilio.env).
@@ -106,7 +107,27 @@ class WildlifePipeline:
             max_missed_frames=max_missed_frames,
         )
 
+        # Sage re-runs the plugin as a fresh process on every cron tick. Without
+        # persisted state the registry restarts empty, so an animal that stays
+        # in view is re-published as new each time. Point --state-file at a
+        # persistent path on a node to keep one animal = one track.
+        self.state_file = Path(state_file) if state_file else None
+        if self.state_file:
+            restored = self.tracks.load_state(self.state_file)
+            print(f"[tracker] restored {restored} track(s) from "
+                  f"{self.state_file}")
+
     # ------------------------------------------------------------------ per image
+
+    def save_state(self):
+        """Persist tracker state, if a state file was configured."""
+        if not self.state_file:
+            return
+        try:
+            self.tracks.save_state(self.state_file)
+        except Exception as exc:
+            # Losing state costs us duplicate alerts later, not this run.
+            print(f"[tracker] could not save state: {type(exc).__name__}: {exc}")
 
     def process_image(self, image_path):
         """Track one frame, classify confirmed objects, and handle new alerts."""
@@ -328,6 +349,7 @@ class WildlifePipeline:
                 print(f"  ERROR: {type(e).__name__}: {e}")
 
         self._write_csv(all_rows)
+        self.save_state()
         print(f"\nDone: {len(images)} images processed")
         print(f"  images -> {self.output_dir}")
         print(f"  CSV    -> {self.csv_path}")

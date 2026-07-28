@@ -1,7 +1,9 @@
 """Sparse-frame animal identity and application-level tracking state."""
 
+import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -383,3 +385,77 @@ class AnimalTrackRegistry:
             and not track.alerted
             and track.missed_frames == 0
         ]
+
+    # ---------------------------------------------------------------- state
+
+    # Sage's scheduler runs the plugin as a fresh process on every cron tick,
+    # so without this the registry starts empty each time: track ids restart
+    # at 1, and an animal that simply stays in view is re-published as a new
+    # animal on every invocation. Persisting the registry keeps
+    # "one animal = one track" across invocations.
+
+    @staticmethod
+    def _to_jsonable(value):
+        """numpy arrays and sets are not JSON types; convert for storage."""
+        if isinstance(value, set):
+            return sorted(value)
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        return value
+
+    def save_state(self, path):
+        """Write the registry to disk so the next invocation can resume."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        tracks = []
+        for track in self.tracks.values():
+            tracks.append({
+                f.name: self._to_jsonable(getattr(track, f.name))
+                for f in fields(track)
+                if f.name != "best_crop"  # an image; re-derived from the frame
+            })
+
+        payload = {"next_track_id": self._next_track_id, "tracks": tracks}
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def load_state(self, path):
+        """Restore a saved registry. A missing or unreadable file starts fresh."""
+        path = Path(path)
+        if not path.is_file():
+            return 0
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"[tracker] could not read state ({type(exc).__name__}); "
+                  "starting fresh")
+            return 0
+
+        restored = 0
+        for data in payload.get("tracks", []):
+            try:
+                data = dict(data)
+                if data.get("box") is not None:
+                    data["box"] = tuple(data["box"])
+                data["sms_delivered_recipients"] = set(
+                    data.get("sms_delivered_recipients") or []
+                )
+                for key in ("appearance", "scene_signature"):
+                    if data.get(key) is not None:
+                        data[key] = np.asarray(data[key], dtype=np.float32)
+                data["center_history"] = [
+                    tuple(point) for point in (data.get("center_history") or [])
+                ]
+                track = TrackedAnimal(**data)
+                self.tracks[track.track_id] = track
+                restored += 1
+            except Exception as exc:
+                print(f"[tracker] skipped a saved track ({type(exc).__name__})")
+
+        self._next_track_id = max(
+            int(payload.get("next_track_id", 1)),
+            max(self.tracks, default=0) + 1,
+        )
+        return restored

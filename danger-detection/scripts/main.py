@@ -105,6 +105,13 @@ def main():
              "(default: 0.3)",
     )
     parser.add_argument(
+        "--state-file",
+        default=os.environ.get("TRACKER_STATE_FILE"),
+        help="persist tracker state here so animals keep one identity across "
+             "separate runs (required on Sage, which re-runs the plugin per "
+             "cron tick)",
+    )
+    parser.add_argument(
         "--publish",
         action="store_true",
         help="publish dangerous detections + annotated images to the Sage "
@@ -175,6 +182,7 @@ def main():
             confirmation_frames=args.confirmation_frames,
             max_missed_frames=args.max_missed_frames,
             publisher=publisher,
+            state_file=args.state_file,
             **({"min_species_confidence": args.min_species_confidence}
                if args.min_species_confidence is not None else {}),
         )
