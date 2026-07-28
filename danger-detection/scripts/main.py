@@ -91,6 +91,12 @@ def main():
         help="skip the Gemma hazard step (faster; hazard columns left blank)",
     )
     parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="publish dangerous detections + annotated images to the Sage "
+             "beehive (for an off-node watcher to alert from)",
+    )
+    parser.add_argument(
         "--baseline",
         action="store_true",
         help="baseline run: first 5 images into output/baseline (replaced each time)",
@@ -144,15 +150,22 @@ def main():
     # Import the ML pipeline only after alert configuration has passed startup
     # validation, so a broken deployment fails before loading any model.
     from pipeline import WildlifePipeline
+    from publisher import open_publisher
 
-    pipeline = WildlifePipeline(
-        use_hazard=not args.no_hazard,
-        gemma_model_id=args.gemma_model_id,
-        alert_config=alert_config,
-        confirmation_frames=args.confirmation_frames,
-        max_missed_frames=args.max_missed_frames,
-    )
-    pipeline.run(args.images, output_dir=output_dir, limit=limit)
+    publisher, plugin = open_publisher(args.publish)
+    try:
+        pipeline = WildlifePipeline(
+            use_hazard=not args.no_hazard,
+            gemma_model_id=args.gemma_model_id,
+            alert_config=alert_config,
+            confirmation_frames=args.confirmation_frames,
+            max_missed_frames=args.max_missed_frames,
+            publisher=publisher,
+        )
+        pipeline.run(args.images, output_dir=output_dir, limit=limit)
+    finally:
+        if plugin is not None:
+            plugin.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

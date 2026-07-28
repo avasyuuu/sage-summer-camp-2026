@@ -3,111 +3,140 @@
 A wildlife-camera pipeline for the Sage platform. Each image goes through three
 stages:
 
-1. **YOLO** (`yolo11n`) detects and localizes animals (bounding boxes).
+1. **YOLO** (`yolo11l`) detects and localizes animals (bounding boxes).
 2. **BioCLIP** identifies the species in each animal crop (scientific + common name).
-3. **Gemma 3** classifies the BioCLIP result as `safe` or `dangerous` using
-   only the identified species and assigns a danger score from 1 through 10.
+3. **Gemma 3** classifies the species as `safe` or `dangerous` and assigns a
+   danger score from 1 to 10.
 
-Outputs, in `output/`:
+Confirmed **dangerous** animals trigger an SMS (Twilio) and a Slack post.
 
-- one annotated image per input (`<name>_detected.jpg`) — box + species label,
-  drawn **red** when Gemma flags it dangerous, green otherwise;
-- one CSV, `output/detections.csv`, with the species, confidence, and hazard
-  verdict for every detection.
+## How it runs today
+
+Sage nodes have limited memory and restricted outbound networking, so **all the
+ML and alerting runs on one machine you control** (a DGX, a workstation, a
+laptop). Sage is used as the *image source*:
+
+```
+Sage beehive  ──pull_images.py──►  query_images/  ──main.py──►  annotated images
+(node uploads)                                                  + detections.csv
+                                                                + SMS / Slack
+```
+
+Everything below happens in one folder, one virtual environment.
+
+## Layout
+
+```
+danger-detection/
+├── scripts/
+│   ├── main.py          entry point — run the pipeline over images
+│   ├── pull_images.py   download images from the Sage beehive
+│   ├── pipeline.py      orchestrates the three models, annotates, writes the CSV
+│   ├── detector.py      YOLO          (finds animals)
+│   ├── species.py       BioCLIP       (identifies the species)
+│   ├── hazard.py        Gemma 3       (safe / dangerous + score)
+│   ├── tracker.py       follows the same animal across frames
+│   ├── alerts.py        Twilio SMS + Slack delivery
+│   ├── publisher.py     publish to the beehive (only used on a Sage node)
+│   └── tests/
+├── test_images/         sample stills
+├── test_sequences/      ordered frames for tracking tests
+├── query_images/        images pulled from the beehive   (git-ignored)
+├── output/              annotated images + detections.csv (git-ignored)
+├── twilio.env           your credentials                  (git-ignored)
+├── requirements.txt
+├── Dockerfile           for deploying to a Sage node later
+└── sage.yaml            Sage app manifest
+```
 
 ## Setup
 
-> **Install the packages into the same Python you run the code with.** Most
-> "works on my machine" problems are really "the packages are in a different
-> Python than the one running." Pick one interpreter (a venv or conda env) and
-> stick with it. Use `python -m pip` (not bare `pip`) so the install lands in
-> that interpreter.
-
-### Option A — local (virtual environment)
+> **Install into the same Python you run the code with.** Most "works on my
+> machine" problems are really "the packages are in a different Python." Pick
+> one venv and stick with it; use `python -m pip`, not bare `pip`.
 
 ```bash
-# from the danger-detection/ folder
-python -m venv .venv
-# Windows PowerShell:  .venv\Scripts\Activate.ps1
-# macOS / Linux:       source .venv/bin/activate
+cd danger-detection
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
 
-**Gemma access:** `google/gemma-3-4b-it` is gated. Before the first run, accept
-Google's Gemma license on the Hugging Face model page and authenticate:
+**Gemma is gated.** Accept Google's license on the Hugging Face model page, then:
 
 ```bash
 hf auth login
 ```
 
-The first run downloads all model weights (YOLO, BioCLIP, and Gemma). Gemma 3
-4B is loaded from its standard BF16 Safetensors checkpoint using Hugging Face
-Transformers and PyTorch, so allow roughly 9 GB of persistent model-cache space
-plus additional runtime memory.
+First run downloads ~10 GB of weights (YOLO + BioCLIP + Gemma) into the Hugging
+Face cache.
 
-### Option B — Docker (matches the Sage deployment)
-
-The container bundles Python + every dependency, so it runs identically on any
-machine regardless of local Python setup.
+**Credentials** — copy the template and fill it in. `twilio.env` is git-ignored
+and must never be committed:
 
 ```bash
-docker build -t elk-detect .
-docker run --rm --gpus all \
-  --mount type=bind,src="$(pwd)/twilio.env",dst=/app/twilio.env,readonly \
-  -v "$(pwd)/output:/app/output" \
-  elk-detect
+cp twilio.env.example twilio.env
 ```
 
-The bind mount supplies protected Twilio configuration without copying it into
-the image. The `-v` mount brings results back out to your `output/` folder.
+| Variable | Needed for |
+|---|---|
+| `TWILIO_*`, `ALERT_RECIPIENTS` | SMS alerts |
+| `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID` | Slack alerts |
+| `SAGE_USER`, `SAGE_USER_TOKEN` | downloading beehive images |
+
+On a Twilio **trial** account, SMS only reaches **verified** numbers.
 
 ## Running
 
+**1. Pull images from the beehive**
+
 ```bash
-# process every image in test_images/ (the default)
-python scripts/main.py
-
-# process specific images
-python scripts/main.py test_images/d37363s15i5.jpg test_images/d70380s20i3.jpg
-
-# skip the (slow) Gemma step — hazard columns left blank
-python scripts/main.py --no-hazard
+python3 scripts/pull_images.py                 # last hour from H00F
+python3 scripts/pull_images.py --start -6h --limit 50
+python3 scripts/pull_images.py --vsn H03B      # your node, once deployed
 ```
 
-`scripts/main.py` automatically loads and validates `twilio.env` from the
-project root. Alert delivery is always active for confirmed dangerous tracks;
-there is no alert-off or dry-run mode. Missing or invalid Twilio configuration
-stops startup before any ML model is loaded.
+Querying the beehive is public; *downloading* images needs the Sage token.
 
-`detections.csv` is rewritten fresh each run, so it always reflects exactly the
-images from that run. Set `GEMMA_MODEL_ID` (or `--gemma-model-id`) to point at a
-different Hugging Face Gemma model.
+**2. Run detection + alerts**
 
-## Layout
-
+```bash
+python3 scripts/main.py query_images     # the images you just pulled
+python3 scripts/main.py                  # default: test_images/
+python3 scripts/main.py --no-hazard      # skip Gemma (fast iteration)
+python3 scripts/main.py --baseline       # first 5 images into output/baseline
 ```
-scripts/
-  main.py       entry point (CLI)
-  pipeline.py   WildlifePipeline — orchestrates the three models, annotates, writes the CSV
-  detector.py   AnimalDetector    — YOLO
-  species.py    SpeciesClassifier — BioCLIP
-  hazard.py     HazardClassifier  — Gemma 3
-test_images/    input images
-output/         annotated images + detections.csv  (git-ignored)
-```
+
+On start it asks where results go: replace `output/`, add a new subfolder, or
+`baseline`. Use `--output replace|new|baseline|<name>` to skip the prompt.
+
+## Outputs
+
+- `output/<name>_detected.jpg` — boxes + species labels, **red** when dangerous
+- `output/detections.csv` — species, confidences, hazard verdict, danger score,
+  track id, and box coordinates (rewritten each run)
+
+## Alerts
+
+Alerts fire for confirmed **dangerous** tracks. If credentials are missing or
+invalid the pipeline **still runs** — it logs `Twilio message failed` /
+`Slack message failed` and keeps saving results, so detection never depends on
+messaging being configured.
+
+## Deploying to a Sage node (later)
+
+`Dockerfile`, `sage.yaml`, and `scripts/publisher.py` exist for running this
+*on* a node, where it would publish detections to the beehive (`--publish`)
+instead of alerting directly. That path is not in use yet — the nodes aren't
+deployed, and Gemma is large for edge hardware.
 
 ## Notes
 
-- **Species scope:** BioCLIP classifies against the full tree of life by default.
-  To constrain it to your target species, build the pipeline with
-  `species_labels=[...]` (see `SpeciesClassifier`).
-- **CPU vs GPU:** runs on CPU anywhere; uses CUDA automatically when available.
-  Gemma on CPU is the slow part — use `--no-hazard` while iterating.
-- **Weights are not committed** (`*.pt` is git-ignored). YOLO auto-downloads;
-  BioCLIP/Gemma download from Hugging Face on first use.
+- **Species scope:** BioCLIP searches the full tree of life. Pass
+  `species_labels=[...]` to constrain it and cut low-confidence noise.
+- **CPU vs GPU:** runs anywhere; uses CUDA when available. Gemma on CPU is slow.
+- **Weights are not committed** (`*.pt` is git-ignored) — they auto-download.
 
-The hazard label describes a species' general capacity to cause serious harm;
-it does not estimate the immediate danger posed by a particular animal. BioCLIP
-can misidentify animals and Gemma can produce incorrect judgments, so
-consequential alerts should be reviewed by a person and validated against local
-wildlife guidance.
+The hazard label describes a species' general capacity to cause harm; it does
+not estimate the danger from a particular animal. BioCLIP can misidentify
+animals and Gemma can be wrong, so consequential alerts deserve human review.

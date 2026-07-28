@@ -10,9 +10,16 @@ __pycache__/
 # Unanchored so they match in any folder, even if the project is renamed.
 .env
 twilio.env
+watcher.env
+
+# Images the watcher downloads from the beehive
+watcher/images/
 
 # Generated results
 output/
+
+# Images pulled down from the beehive
+query_images/
 
 # Model weights (sam3.pt is gated, don't republish it)
 *.pt

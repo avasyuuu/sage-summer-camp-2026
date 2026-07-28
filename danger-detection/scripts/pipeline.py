@@ -19,6 +19,7 @@ from alerts import (
     SMSAlertSender,
 )
 from detector import AnimalDetector
+from publisher import NullPublisher
 from species import ANIMAL_LABELS, SpeciesClassifier
 from tracker import AnimalTrackRegistry
 
@@ -55,7 +56,7 @@ class WildlifePipeline:
     def __init__(self, conf=0.35, use_hazard=True, species_labels=None,
                  gemma_model_id=None,
                  alert_config=None, confirmation_frames=1,
-                 max_missed_frames=30):
+                 max_missed_frames=30, publisher=None):
         # Resolve alert configuration before loading any expensive ML models.
         # Without usable credentials we degrade to detection-only rather than
         # failing, so the plugin still runs (e.g. a node with no twilio.env).
@@ -87,6 +88,8 @@ class WildlifePipeline:
         # Where results go. run() can override this per batch.
         self.output_dir = OUTPUT_DIR
         self.csv_path = CSV_PATH
+        # NullPublisher unless --publish is used, so local runs are unchanged.
+        self.publisher = publisher or NullPublisher()
         self.alerts = AlertManager(
             sms_sender=sms_sender,
             slack_sender=slack_sender,
@@ -143,6 +146,15 @@ class WildlifePipeline:
         # copy newly available labels back onto this frame's detections.
         self.tracks.enrich_detections(animal_detections)
         annotated_path = self._save_annotated(image, image_path, detections)
+
+        # Publish to the beehive before alerting. On a real node this is the
+        # only outbound path: an off-node watcher polls the Sage data API and
+        # sends the SMS/Slack messages, because nodes can't reach them directly.
+        for track in self.tracks.alert_candidates():
+            self.publisher.publish_track(
+                track, Path(image_path).name, annotated_path
+            )
+
         self.alerts.handle_tracks(
             image_path,
             self.tracks.alert_candidates(),
