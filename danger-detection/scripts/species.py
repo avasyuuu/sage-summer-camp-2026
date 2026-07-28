@@ -19,15 +19,25 @@ class SpeciesClassifier:
     to classify against the full tree of life.
     """
 
-    def __init__(self, labels=None, padding=0.05):
+    def __init__(self, labels=None, padding=0.05, device=None):
+        # pybioclip defaults to CPU, so on a GPU box BioCLIP would silently stay
+        # on the CPU while YOLO and Gemma use CUDA. Pick the GPU when there is
+        # one; pass `device` explicitly to override.
+        if device is None:
+            import torch
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device
+        print(f"[bioclip] using device: {device}")
+
         if labels:
             from bioclip import CustomLabelsClassifier
 
-            self.classifier = CustomLabelsClassifier(labels)
+            self.classifier = CustomLabelsClassifier(labels, device=device)
         else:
             from bioclip import Rank, TreeOfLifeClassifier
 
-            self.classifier = TreeOfLifeClassifier()
+            self.classifier = TreeOfLifeClassifier(device=device)
             self.rank = Rank.SPECIES
 
         self.labels = labels
