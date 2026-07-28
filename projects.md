@@ -15,9 +15,9 @@ sends alerts with the annotated image.
 Our objectives were to:
 
 * Process images collected from a SAGE camera stream.
-* Detect and track animals without repeatedly alerting on the same individual.
-* Improve species identification beyond YOLO's general animal classes.
-* Send useful warnings through both SMS and Slack.
+* Detect, classify, and track dangerous animals from each camera frame
+* Send alert messages through SMS and Slack
+* Refine the system to remove double alerts or missed animals
 
 ## Our Work
 
